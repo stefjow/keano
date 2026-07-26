@@ -70,6 +70,24 @@ All in `config/config.R`: `H3_RESOLUTION`, `WINDOW_MONTHS`,
 Rankings and composites are **derived views** — they can be redefined at any
 time without touching the stored panel or metric history.
 
+## Planned: daily nowcast layer
+
+The scored history is monthly by design (the monthly L3 product is the sole
+source of the panel, and credits are decided at month close, like camsmap's
+period-close rule). Unlike camsmap's gap-free CAMS *model* data, TROPOMI is
+observational — daily values have cloud gaps — so daily data adds engagement,
+not accuracy.
+
+Planned after v1 has proven itself on real data: a **provisional
+"current month" layer** fed by the daily global product
+(`terrascope-s5p-l3-no2-td-v2`) — a month-to-date mean per cell, clearly
+marked provisional, discarded and replaced by the official monthly value at
+month close. Purely a display layer: provisional values are never written to
+the panel, so the append-only contract is untouched. Only the running month's
+daily files are kept. Also worth checking on the first real run: the
+publication lag of the monthly product — the longer the lag, the more this
+layer matters.
+
 ## Name
 
 *ke anu* (Hawaiian) ≈ "the coolness / the cool breeze" — also readable as
