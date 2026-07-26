@@ -1,0 +1,7 @@
+data/
+tmp/
+.Rhistory
+.RData
+.Rproj.user
+*.Rproj
+.Renviron
