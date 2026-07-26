@@ -14,7 +14,7 @@ ensure_dir(DATA_RAW)
 ensure_dir(file.path(TMP_DIR, "previews"))
 
 # --- Determine the incremental date range -----------------------------------
-existing = list.files(DATA_RAW, pattern = "^no2_monthly_\\d{8}\\.tif$")
+existing = list.files(DATA_RAW, pattern = "^no2_monthly_\\d{8}.*\\.tif$")
 
 if (length(existing) > 0) {
   last_date = max(as.Date(regmatches(existing, regexpr("\\d{8}", existing)),
