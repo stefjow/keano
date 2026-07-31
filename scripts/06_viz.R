@@ -100,7 +100,8 @@ do_shard = function(s) {
     n_y   = sum(is.finite(perf_short)),
     sum_t = sum(perf_long[is.finite(perf_long)]),
     n_t   = sum(is.finite(perf_long)),
-    credit = sum(credit, na.rm = TRUE),    n_el = sum(elig)
+    credit = sum(credit, na.rm = TRUE),    n_el = sum(elig),
+    n_cr  = sum(!is.na(credit) & credit > 0)
   ), by = r3]
 
   fine = last[is.finite(m),
@@ -201,6 +202,12 @@ delta_u16_raw = function(lev) {
   x = rawConnectionValue(con); close(con)
   x
 }
+raw_bin = function(v, size) {
+  con = rawConnection(raw(0), "wb")
+  writeBin(v, con, size = size, endian = "little")
+  x = rawConnectionValue(con); close(con)
+  x
+}
 bitmap_raw = function(r3i, key, B) {   # LSB-first occupancy bitmap per parent
   dt = data.table(byte = (r3i - 1L) * B + key %/% 8L,
                   v = bitwShiftL(1L, key %% 8L))
@@ -231,6 +238,10 @@ add_sec("tt3", delta_u8(lev_u8(t_sym(r3last$t3, sym_t))))
 add_sec("tc3", delta_u8(lev_u8(fifelse(!is.na(r3last$n_el) & r3last$n_el > 0,
                                        t_cr(r3last$credit, cr3_max), NA_real_))))
 add_sec("r3series", delta_u16_raw(lev_u16(t_ser)))
+# exact regional credit for the viewport-aware "top regions" table
+add_sec("cr3f", raw_bin(as.numeric(fifelse(is.na(r3last$credit), 0,
+                                           r3last$credit)), 4L))
+add_sec("nc3", raw_bin(fifelse(is.na(r3last$n_cr), 0L, r3last$n_cr), 2L))
 
 tier_sec = function(r, tt, key, B, crmax) {
   add_sec(paste0("bm", r), bitmap_raw(tt$r3i, key, B))
@@ -265,10 +276,6 @@ message("Container: ", round(length(bin) / 2^20, 1), " MB raw -> ",
 monthly = fread(file.path(DATA_RANKINGS, "monthly_summary.csv"))
 series_global = monthly[, .(month, credit = round(total_credit, 1),
                             perf = round(mean_perf_short_eligible, 5))]
-top = fread(file.path(DATA_RANKINGS, "monthly_top_credits.csv"))[month == latest]
-top = head(top, 15)[, .(h3, lat = round(lat, 4), lng = round(lng, 4),
-                        m = round(m, 1), baseline = round(baseline, 1),
-                        credit = round(credit, 4))]
 stats = as.list(monthly[month == latest,
                         .(n_cells_obs, n_eligible, n_records,
                           total_credit = round(total_credit))])
@@ -287,7 +294,6 @@ meta = list(
   bin_len = length(bin),
   manifest = manifest,
   series_global = series_global,
-  top = top,
   stats = stats
 )
 meta_json = toJSON(meta, auto_unbox = TRUE, digits = NA)

@@ -248,10 +248,11 @@
         <canvas id="chart-credit" height="74"></canvas>
       </div>
       <div class="top-block">
-        <h3 id="top-title">Top credits</h3>
+        <h3 id="top-title">Top regions</h3>
         <table id="top-table"></table>
-        <p class="note">Credit = relative undercut of the cell’s own 5-year
-        baseline. Click → to fly to the cell.</p>
+        <p class="note">Σ = paid credit summed over the cells of a
+        ~12,400 km² region this month, with the number of credited cells.
+        Follows the map view. Click → to fly to the region.</p>
       </div>
     </div>
   </aside>
@@ -357,12 +358,23 @@ function buildTier(bin, r, B) {
   };
 }
 
+function secF32(bin, name) {
+  const [off, len] = SEC[name];
+  return new Float32Array(bin.slice(off, off + len).buffer);  // aligned copy
+}
+function secU16raw(bin, name) {
+  const [off, len] = SEC[name];
+  return new Uint16Array(bin.slice(off, off + len).buffer);
+}
+
 function setupData(bin) {
   R3 = {
     ids: new TextDecoder("ascii").decode(secBytes(bin, "r3ids")),
     tm: secU8(bin, "tm3"), ty: secU8(bin, "ty3"),
     tt: secU8(bin, "tt3"), tc: secU8(bin, "tc3"),
-    series: secU16(bin, "r3series")
+    series: secU16(bin, "r3series"),
+    credit: secF32(bin, "cr3f"),      // exact regional credit sums
+    ncr: secU16raw(bin, "nc3")        // credited cells per region
   };
   TIERS[4] = buildTier(bin, 4, 1);
   TIERS[5] = buildTier(bin, 5, 8);
@@ -548,10 +560,11 @@ function setupMap() {
     paint: { "line-color": "rgba(213,227,225,0.22)", "line-width": 0.5 }
   });
 
-  map.on("moveend", updateFine);
+  map.on("moveend", () => { updateFine(); updateTopRegions(); });
   map.on("mousemove", onHover);
   map.on("zoomend", () => { if (activeLayer === "credit") drawLegend(); });
   updateFine();
+  updateTopRegions();
   loading.remove();
 }
 
@@ -859,28 +872,50 @@ function drawCharts() {
     Math.round(last.credit).toLocaleString("en-US");
 }
 
-/* --- Top table + footer ------------------------------------------------------------- */
+/* --- Top regions (follows the viewport) ----------------------------------------------- */
 const flyMarker = new maplibregl.Marker({ color: "#4fd6c2", scale: 0.8 });
 function monthName(m) {
   const n = ["January","February","March","April","May","June","July",
              "August","September","October","November","December"];
   return n[+m.slice(5) - 1] + " " + m.slice(0, 4);
 }
-function buildTop() {
-  document.getElementById("top-title").textContent = "Top credits — " + monthName(META.month);
+function updateTopRegions() {
+  const b = map.getBounds();
+  let w = b.getWest(), e = b.getEast();
+  const s = b.getSouth(), n = b.getNorth();
+  const global = e - w >= 360 && s <= -60 && n >= 75;
+  const idxs = [];
+  for (let j = 0; j < NP; j++) {
+    if (R3.credit[j] <= 0) continue;
+    if (!global) {
+      const la = r3Lat[j];
+      if (la < s || la > n) continue;
+      const lo = r3Lng[j];
+      if (!(lo >= w && lo <= e) && !(lo + 360 >= w && lo + 360 <= e) &&
+          !(lo - 360 >= w && lo - 360 <= e)) continue;
+    }
+    idxs.push(j);
+  }
+  idxs.sort((a, z) => R3.credit[z] - R3.credit[a]);
+
+  document.getElementById("top-title").textContent =
+    "Top regions — " + (global ? monthName(META.month) : "in view");
   const tb = document.getElementById("top-table");
-  META.top.forEach((r, i) => {
+  tb.textContent = "";
+  idxs.slice(0, 10).forEach((j, i) => {
     const tr = document.createElement("tr");
     const loc = document.createElement("button");
     loc.className = "loc"; loc.textContent = "→";
-    loc.setAttribute("aria-label", "Fly to cell " + (i + 1));
+    loc.setAttribute("aria-label", "Fly to region " + (i + 1));
     loc.addEventListener("click", () => {
-      flyMarker.setLngLat([r.lng, r.lat]).addTo(map);
-      map.flyTo({ center: [r.lng, r.lat], zoom: 8.2 });
+      flyMarker.setLngLat([r3Lng[j], r3Lat[j]]).addTo(map);
+      map.flyTo({ center: [r3Lng[j], r3Lat[j]], zoom: 6.6 });
     });
+    const cr = R3.credit[j];
     const tds = [
-      ["rk", String(i + 1)], ["", fmtCoord(r.lat, r.lng)],
-      ["cr", (r.credit * 100).toFixed(1) + "%"]
+      ["rk", String(i + 1)], ["", fmtCoord(r3Lat[j], r3Lng[j])],
+      ["", R3.ncr[j] + "c"],
+      ["cr", "Σ " + (cr >= 10 ? cr.toFixed(1) : cr.toFixed(2))]
     ].map(([cls, txt]) => {
       const td = document.createElement("td");
       if (cls) td.className = cls;
@@ -892,6 +927,13 @@ function buildTop() {
     tr.append(...tds, tdLoc);
     tb.appendChild(tr);
   });
+  if (idxs.length === 0) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.textContent = "no credited regions in view";
+    tr.appendChild(td);
+    tb.appendChild(tr);
+  }
 }
 function buildFooter() {
   const s = META.stats, f = document.getElementById("stats");
@@ -925,7 +967,7 @@ document.getElementById("panel-toggle").addEventListener("click", () => {
 
 /* --- Init ------------------------------------------------------------------------------ */
 document.getElementById("month-chip").textContent = monthName(META.month);
-drawLegend(); drawCharts(); buildTop(); buildFooter();
+drawLegend(); drawCharts(); buildFooter();
 window.addEventListener("resize", drawCharts);
 </script>
 </body>
