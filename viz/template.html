@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>keano — global NO₂ hexagon map</title>
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.19.0/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@5.19.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/h3-js@4.5.0/dist/h3-js.umd.js"></script>
 <style>
   /* Committed single dark theme: a satellite-data viewer. */
@@ -484,6 +484,32 @@ function loadSeries() {
   }).catch(console.error);
 }
 
+/* per-hex monthly series (web only): every rendered hex's feature id is its
+   tier-global cell index, so its NM×u16 row sits at a fixed offset in
+   s<res>.bin — one ~200-byte HTTP range request per hovered hex. */
+const cellSeriesCache = new Map();
+let rangesOK = true;
+async function fetchCellSeries(res, cellIdx) {
+  const key = res + ":" + cellIdx;
+  if (cellSeriesCache.has(key)) return cellSeriesCache.get(key);
+  if (!rangesOK) return null;
+  const o = cellIdx * NM * 2;
+  try {
+    const resp = await fetch(WEB.base + "/" + WEB.series2[res], {
+      headers: { Range: "bytes=" + o + "-" + (o + NM * 2 - 1) }
+    });
+    if (resp.status !== 206) {   // server ignores ranges: don't pull whole file
+      rangesOK = false;
+      console.warn("range requests unsupported — per-hex trends disabled");
+      return null;
+    }
+    const a = undelta16(new Uint16Array(await resp.arrayBuffer()));
+    if (cellSeriesCache.size > 1000) cellSeriesCache.clear();
+    cellSeriesCache.set(key, a);
+    return a;
+  } catch (err) { console.error(err); return null; }
+}
+
 /* --- H3 id reconstruction (mirrors child_id() in 06_viz.R, self-tested there
    against h3jsr; H3 v4 bit layout is fixed) -------------------------------- */
 const HEX = "0123456789abcdef";
@@ -613,6 +639,7 @@ const map = new maplibregl.Map({
   attributionControl: false
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }));
+if (maplibregl.GlobeControl) map.addControl(new maplibregl.GlobeControl());
 map.addControl(new maplibregl.AttributionControl({ compact: true }));
 
 const EMPTY = { type: "FeatureCollection", features: [] };
@@ -657,6 +684,8 @@ function setupMap() {
   map.on("moveend", () => { updateFine(); updateTopRegions(); });
   map.on("mousemove", onHover);
   map.on("zoomend", () => { if (activeLayer === "credit") drawLegend(); });
+  // globe <-> mercator flips what getBounds() covers without a moveend
+  map.on("projectiontransition", scheduleFineRefresh);
   updateFine();
   updateTopRegions();
   loading.remove();
@@ -804,23 +833,34 @@ function showRegion(f) {
 
   const r3i = r3Index.get(res === 3 ? P.id : parentR3(P.id));
   const cellNow = res > 3 && P.tm >= 0 ? dec.m(P.tm) : null;
-  drawRegionChart(r3i, cellNow);
-  rp.note.textContent = (res > 3
-    ? "12-month mean NO₂ of the surrounding res-3 region · □ this " +
-      (res === 6 ? "cell" : "res-" + res + " region") + " now, "
-    : "12-month mean NO₂ (m), ") +
-    META.months[0] + " … " + META.months[NM - 1];
+  const wantOwn = WEB && WEB.series2 && res > 3;
+  let own = wantOwn ? cellSeriesCache.get(res + ":" + f.id) : null;
+  if (wantOwn && !own) {
+    const seq = ++chartSeq;
+    fetchCellSeries(res, f.id).then(a => {
+      if (a && seq === chartSeq) drawRegionChart(r3i, cellNow, a);
+    });
+  }
+  drawRegionChart(r3i, cellNow, own || null);
+  const range = META.months[0] + " … " + META.months[NM - 1];
+  rp.note.textContent = (res === 3
+    ? "12-month mean NO₂ (m), " + range
+    : wantOwn
+    ? "12-month mean NO₂ — this hex (teal) vs its res-3 region (grey), " + range
+    : "12-month mean NO₂ of the surrounding res-3 region · □ this " +
+      (res === 6 ? "cell" : "res-" + res + " region") + " now, " + range);
   rp.panel.hidden = false;
 }
+let chartSeq = 0;
 
-function drawRegionChart(r3i, cellNow) {
+function drawRegionChart(r3i, cellNow, ser) {
   const cv = rp.chart, dpr = window.devicePixelRatio || 1;
   const W = cv.clientWidth || 310, H = 84;
   cv.width = W * dpr; cv.style.height = H + "px"; cv.height = H * dpr;
   const c = cv.getContext("2d");
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (r3i === undefined) return;
-  if (!R3.series) {   // web mode: series still on its way
+  if (!R3.series) {   // web mode: region series still on its way
     pendingChart = { r3i, cellNow };
     c.font = "9.5px " + getComputedStyle(document.body).getPropertyValue("--mono");
     c.fillStyle = "#6e8489";
@@ -829,19 +869,28 @@ function drawRegionChart(r3i, cellNow) {
   }
   pendingChart = null;
 
-  const vals = new Array(NM);
+  const decode = at => { const t = lev2t16(at); return t < 0 ? NaN : dec.m(t); };
+  const vals = new Array(NM);        // res-3 region
+  const own = ser ? new Array(NM) : null;   // the hovered hex itself
   let lo = Infinity, hi = -Infinity, any = false;
   for (let j = 0; j < NM; j++) {
-    const t = lev2t16(R3.series[r3i * NM + j]);
-    vals[j] = t < 0 ? NaN : dec.m(t);
+    vals[j] = decode(R3.series[r3i * NM + j]);
     if (!isNaN(vals[j])) {
       any = true;
       if (vals[j] < lo) lo = vals[j];
       if (vals[j] > hi) hi = vals[j];
     }
+    if (own) {
+      own[j] = decode(ser[j]);
+      if (!isNaN(own[j])) {
+        any = true;
+        if (own[j] < lo) lo = own[j];
+        if (own[j] > hi) hi = own[j];
+      }
+    }
   }
   if (!any) return;
-  if (cellNow != null) {           // keep the hovered cell's marker in range
+  if (!own && cellNow != null) {     // keep the hovered hex's marker in range
     if (cellNow < lo) lo = cellNow;
     if (cellNow > hi) hi = cellNow;
   }
@@ -859,23 +908,28 @@ function drawRegionChart(r3i, cellNow) {
     }
   });
 
-  c.beginPath();
-  let pen = false;
-  for (let j = 0; j < NM; j++) {
-    if (isNaN(vals[j])) { pen = false; continue; }
-    pen ? c.lineTo(X(j), Y(vals[j])) : c.moveTo(X(j), Y(vals[j]));
-    pen = true;
-  }
-  c.strokeStyle = "#4fd6c2"; c.lineWidth = 1.4; c.stroke();
+  const line = (v, color, width) => {
+    c.beginPath();
+    let pen = false;
+    for (let j = 0; j < NM; j++) {
+      if (isNaN(v[j])) { pen = false; continue; }
+      pen ? c.lineTo(X(j), Y(v[j])) : c.moveTo(X(j), Y(v[j]));
+      pen = true;
+    }
+    c.strokeStyle = color; c.lineWidth = width; c.stroke();
+  };
+  line(vals, own ? "rgba(110,132,137,0.85)" : "#4fd6c2", own ? 1.1 : 1.4);
+  if (own) line(own, "#4fd6c2", 1.4);
 
+  const lead = own || vals;          // dot + value on the most specific line
   let lastJ = NM - 1;
-  while (lastJ >= 0 && isNaN(vals[lastJ])) lastJ--;
+  while (lastJ >= 0 && isNaN(lead[lastJ])) lastJ--;
   if (lastJ >= 0) {
-    c.beginPath(); c.arc(X(lastJ), Y(vals[lastJ]), 2.4, 0, Math.PI * 2);
+    c.beginPath(); c.arc(X(lastJ), Y(lead[lastJ]), 2.4, 0, Math.PI * 2);
     c.fillStyle = "#4fd6c2"; c.fill();
     c.fillStyle = "#d5e3e1";
-    c.fillText(fmt.m(vals[lastJ]), X(lastJ) + 6, Y(vals[lastJ]) + 3);
-    if (cellNow != null) {
+    c.fillText(fmt.m(lead[lastJ]), X(lastJ) + 6, Y(lead[lastJ]) + 3);
+    if (!own && cellNow != null) {
       c.strokeStyle = "#d5e3e1"; c.lineWidth = 1.2;
       c.strokeRect(X(lastJ) - 2.5, Y(cellNow) - 2.5, 5, 5);
     }

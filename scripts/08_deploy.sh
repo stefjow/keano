@@ -6,7 +6,8 @@
 # immutable (new month = new directory), so --delete only ever removes
 # months you decided to drop, and index.html is replaced atomically last.
 #
-# Usage:  scripts/08_deploy.sh [user@host:/path]   (or set DEPLOY_TARGET)
+# Usage:  scripts/08_deploy.sh [user@host:/path] [ssh-port]
+#         (or set DEPLOY_TARGET / DEPLOY_PORT; defaults below)
 #
 # nginx for the target directory:
 #
@@ -25,18 +26,15 @@
 set -euo pipefail
 
 SRC="$(dirname "$0")/../data/viz/web/"
-TARGET="${1:-${DEPLOY_TARGET:-}}"
+TARGET="${1:-${DEPLOY_TARGET:-user@host:/path}}"
+PORT="${2:-${DEPLOY_PORT:-22}}"
 
-if [[ -z "$TARGET" ]]; then
-  echo "No target. Usage: scripts/08_deploy.sh user@host:/var/www/no2" >&2
-  exit 1
-fi
 if [[ ! -f "$SRC/index.html" ]]; then
   echo "No web bundle at $SRC — run scripts/06_viz.R first." >&2
   exit 1
 fi
 
 # data first (new month appears fully before the new index.html points at it)
-rsync -av --exclude index.html "$SRC" "$TARGET/"
-rsync -av "$SRC/index.html" "$TARGET/index.html"
+rsync -av -e "ssh -p $PORT" --exclude index.html "$SRC" "$TARGET/"
+rsync -av -e "ssh -p $PORT" "$SRC/index.html" "$TARGET/index.html"
 echo "Deployed to $TARGET"

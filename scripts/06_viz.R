@@ -276,7 +276,7 @@ lev6 = list(
                       NA_real_))
 )
 add_sec("bm6", bitmap_raw(fine$r3i, fine$path, 64L))
-for (nm in names(lev6)) add_sec(paste0(nm, 6), delta_u8(lev6[[nm]]))
+for (pl in names(lev6)) add_sec(paste0(pl, 6), delta_u8(lev6[[pl]]))
 
 bin = do.call(c, unname(sections))
 comp = memCompress(bin, type = "gzip")   # zlib stream; browser sniffs format
@@ -374,6 +374,116 @@ for (k in seq_along(rl$lengths)) {
   write_bin_gz(as.raw(raw_k), file.path(wdata, sprintf("r6-%04d.bin", k - 1L)))
   chunks_meta[[k]] = c(a - 1L, nr, length(cells))
 }
+# --- Per-hex monthly series (web only; fetched per cell via HTTP ranges) -----
+# s<r>.bin holds one row per tier-r hex in plane order (r3, then digit path),
+# NM u16 levels delta-encoded per row. A hex's row sits at featureId*NM*2, so
+# the client range-fetches exactly 2*NM bytes on hover. Too big to embed
+# (res-6: ~2.4 GB), cheap to store, never downloaded in bulk.
+do_series_shard = function(s) {
+  clamp01 = function(t) pmin(pmax(t, 0), 1)
+  lev16 = function(m) {
+    t = clamp01((log10(pmax(m, 1e-6)) - lmin) / (lmax - lmin))
+    fifelse(is.finite(t), 1L + as.integer(round(t * 65533)), 0L)
+  }
+  write_rows = function(v, nrows, path) {
+    d = (v - c(0L, v[-length(v)])) %% 65536L
+    starts = (seq_len(nrows) - 1L) * nm + 1L
+    d[starts] = v[starts]
+    d = ifelse(d > 32767L, d - 65536L, d)
+    con = file(path, "wb")
+    writeBin(d, con, size = 2L, endian = "little")
+    close(con)
+  }
+
+  ce = open_dataset(file.path(DATA_LOOKUP, "cells.parquet")) |>
+    filter(shard == s) |> select(cell_id, h3) |> collect() |> as.data.table()
+  ce[, `:=`(r3 = parent_r3(h3), path = path_r6(h3), h3 = NULL)]
+  hist = open_dataset(DATA_METRICS) |>
+    filter(shard == s) |> select(cell_id, month, m) |> collect() |>
+    as.data.table()
+  hist = hist[is.finite(m)]
+  if (nrow(hist) == 0) return(NULL)
+  hist[ce, `:=`(r3 = i.r3, path = i.path), on = "cell_id"]
+  hist[, j := chmatch(month, months_all)]
+
+  counts = integer(3)
+  # res 6: cells with finite m in the latest month, ordered like the planes.
+  # A shard can have history but no current cells (Antarctic winter): it then
+  # contributes no rows to any tier — same exclusion as the metric planes.
+  rows = ce[cell_id %in% hist[month == latest, cell_id]]
+  if (nrow(rows) == 0) return(NULL)
+  setorder(rows, r3, path)
+  rows[, i := .I]
+  hist[rows, i6 := i.i, on = "cell_id"]
+  v = integer(nrow(rows) * nm)
+  sub = hist[!is.na(i6)]
+  v[(sub$i6 - 1L) * nm + sub$j] = lev16(sub$m)
+  # self-check: one random row re-derived straight from the metric history
+  k = sample(nrow(rows), 1)
+  chk = integer(nm)
+  smp = hist[i6 == k]
+  chk[smp$j] = lev16(smp$m)
+  stopifnot(identical(chk, v[(k - 1L) * nm + seq_len(nm)]))
+  write_rows(v, nrow(rows), file.path(wdata, sprintf(".s6-%s.tmp", s)))
+  counts[3] = nrow(rows)
+  bounds = c(rows$r3[1], rows$r3[nrow(rows)])
+  rm(v, sub)
+
+  # res 4/5: mean of children m per month, rows = groups present at latest
+  for (spec in list(list(r = 4L, div = 64L), list(r = 5L, div = 8L))) {
+    g = hist[, .(lev = lev16(mean(m))), by = .(r3, p = path %/% spec$div, j)]
+    rws = unique(rows[, .(r3, p = path %/% spec$div)])
+    setkey(rws, r3, p)
+    rws[, i := .I]
+    g[rws, ig := i.i, on = c("r3", "p")]
+    g = g[!is.na(ig)]
+    v = integer(nrow(rws) * nm)
+    v[(g$ig - 1L) * nm + g$j] = g$lev
+    write_rows(v, nrow(rws), file.path(wdata, sprintf(".s%d-%s.tmp", spec$r, s)))
+    counts[spec$r - 3L] = nrow(rws)
+    rm(v, g)
+  }
+  list(shard = s, n = counts, r3_first = bounds[1], r3_last = bounds[2])
+}
+
+cl = makeCluster(max(1L, min(N_WORKERS, length(shards))), outfile = "")
+clusterExport(cl, c("do_series_shard", "parent_r3", "path_r6", "months_all",
+                    "latest", "nm", "lmin", "lmax", "wdata",
+                    "DATA_METRICS", "DATA_LOOKUP"))
+invisible(clusterEvalQ(cl, suppressMessages({
+  library(data.table); library(arrow); library(dplyr)
+  setDTthreads(2); set_cpu_count(2)
+})))
+res = parLapplyLB(cl, shards, function(s) try(do_series_shard(s), silent = TRUE))
+stopCluster(cl)
+failed = vapply(res, inherits, TRUE, "try-error")
+if (any(failed)) {
+  stop("Failed series shards:\n",
+       paste(unlist(lapply(res[failed], as.character)), collapse = "\n"))
+}
+res = res[!vapply(res, is.null, TRUE)]
+# rows concatenated in sorted-shard order must tile the global plane order:
+# counts match, and per-shard res-3 ranges are strictly increasing
+stopifnot(
+  sum(vapply(res, function(x) x$n[3], 1L)) == nrow(fine),
+  sum(vapply(res, function(x) x$n[2], 1L)) == nrow(t5),
+  sum(vapply(res, function(x) x$n[1], 1L)) == nrow(t4),
+  !is.unsorted(unlist(lapply(res, function(x) c(x$r3_first, x$r3_last)))))
+for (r in 4:6) {
+  target = file.path(wdata, sprintf("s%d.bin", r))
+  unlink(target)
+  parts = file.path(wdata, sprintf(".s%d-%s.tmp", r,
+                                   vapply(res, `[[`, "", "shard")))
+  file.create(target)
+  stopifnot(file.append(target, parts))
+  unlink(parts)
+}
+stopifnot(file.size(file.path(wdata, "s6.bin")) == nrow(fine) * nm * 2)
+message("Per-hex series: ",
+        paste(sprintf("s%d.bin %.0f MB", 4:6,
+                      file.size(file.path(wdata, sprintf("s%d.bin", 4:6))) / 2^20),
+              collapse = ", "))
+
 meta_web = meta
 meta_web$web = list(
   base = paste0("data/", latest),
@@ -381,6 +491,7 @@ meta_web$web = list(
                series = list(name = "series.bin"),
                t4 = list(name = "t4.bin", manifest = t4f$manifest),
                t5 = list(name = "t5.bin", manifest = t5f$manifest)),
+  series2 = list(`4` = "s4.bin", `5` = "s5.bin", `6` = "s6.bin"),
   r6 = chunks_meta
 )
 splice(meta_web, "", file.path(WEB_DIR, "index.html"))
