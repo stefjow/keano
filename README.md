@@ -13,9 +13,9 @@ incentive-driven system. Successor to the city-based
 
 | Decision | Choice | Why |
 |---|---|---|
-| Data source | Terrascope S5P L3 **monthly** global NO₂ (`terrascope-s5p-l3-no2-tm-v2`, ~0.05°) | One global GeoTIFF per month since 2018-05; QA-filtered upstream (qa > 0.75); right cadence for trends |
-| Weights | Not used | Daily/monthly mid-latitude coverage is dense; the polar-night problem the weights solve in tropomi-timelapse doesn't affect per-cell time series with NA-dropping |
-| Grid | H3 resolution 6 (~36 km², ~3.7 km edge) | Fine enough to see structure *within* cities; matches native pixel size (~1–2 pixels per hex) |
+| Data source | Terrascope S5P L3 **monthly** global NO₂ (`terrascope-s5p-l3-no2-tm-v2`, 0.02°) | One global GeoTIFF per month since 2018-05; QA-filtered upstream (qa > 0.75); right cadence for trends |
+| Weights | **Spatial only**: hex means are weighted by the L3 coverage weight (`NO2_WEIGHT`); the 12-month window in `m` stays unweighted | Within-hex coverage varies sharply at the winter twilight edge (measured p95 estimator difference 1.1% on eligible cells vs. the 2% credit margin), so the weighted hex mean matters. Coverage-weighting *months* (as tropomi-timelapse does) would break `m`'s deseasonalization-by-construction — summers are systematically better observed, and coverage trends would alias into NO₂ trends. The polar-night case is handled by NA-dropping + `MIN_MONTHS_IN_WINDOW` instead |
+| Grid | H3 resolution 6 (~36 km², ~3.7 km edge) | Fine enough to see structure *within* cities; ~7 native 0.02° pixels per hex |
 | Workhorse series | `m` = trailing 12-month mean of monthly NO₂ | Deseasonalized *by construction* (full-year window); smooths retrieval noise; causal |
 | Short-term score | `perf_short` = YoY change of `m` | Causal, comparable across cells |
 | Long-term score | `perf_long` = annualized change of `m` vs. the cell's first full year | Causal |
@@ -38,11 +38,13 @@ rows; closed months never change. Two rules keep that true:
 ## Pipeline
 
 ```
-scripts/01_download.R      Terrascope monthly global GeoTIFFs -> data/raw/ (append-only)
+scripts/01_download.R      Terrascope monthly GeoTIFFs (NO2 + weight) -> data/raw/ (append-only)
 scripts/02_build_lookup.R  one-time: pixel centers -> H3 res-6 cells -> data/lookup/
 scripts/03_build_panel.R   per new month: raster -> per-cell means -> data/panel/ (hive parquet)
 scripts/04_metrics.R       per shard: m, perf_short, perf_long, baseline, credit -> data/metrics/
 scripts/05_rankings.R      derived views: monthly records, top credits, summaries -> data/rankings/
+scripts/06_viz.R           latest month -> interactive H3 hexagon map -> data/viz/index.html
+scripts/07_publish.R       map + rankings CSVs + README -> PUBLISH_DIR (network share)
 ```
 
 The panel is partitioned `month=YYYY-MM/shard=<h3-res0-parent>` so both
@@ -61,14 +63,26 @@ R ≥ 4.0 with `terrascoper` (Terrascope STAC download, with credentials
 configured), plus CRAN packages `terra`, `data.table` (≥ 1.16 for
 `frollmax`), `h3jsr`, `arrow`, `sf` — auto-installed via `loadPackages()`.
 
-Storage: ~5 GB raw GeoTIFFs (95 months), a few GB parquet.
+Storage: ~22 GB raw GeoTIFFs (95+ months, ~222 MB NO2 + ~9 MB weight each),
+a few GB parquet.
 
 ## Tuning knobs
 
 All in `config/config.R`: `H3_RESOLUTION`, `WINDOW_MONTHS`,
-`BASELINE_WINDOW_MONTHS`, `CREDIT_MARGIN`, `NO2_FLOOR`, `TOP_N`.
+`BASELINE_WINDOW_MONTHS`, `CREDIT_MARGIN`, `NO2_FLOOR`, `TOP_N`, and
+`N_WORKERS` (scripts 02–05 parallelize over chunks/months/shards).
 Rankings and composites are **derived views** — they can be redefined at any
-time without touching the stored panel or metric history.
+time without touching the stored panel or metric history. So is the map:
+script 06 writes a single `data/viz/index.html` (MapLibre + h3-js, dark
+basemap) with res-3 hexagons globally — each carrying its full monthly `m`
+series, shown as a mouse-over trend panel — and full-coverage res-4/5/6
+tiers as you zoom in (~0.3M / 1.8M / 12.4M cells), with layers for NO₂
+level, YoY, long-term trend, and credit. No per-cell ids, coordinates or
+geometry are shipped: each tier is a per-res-3-parent occupancy bitmap plus
+delta-encoded quantized metric planes in one zlib-compressed embedded
+container, and the browser reconstructs H3 ids and hexagon outlines for the
+current viewport only. Self-contained (no server); only the map libraries
+and basemap tiles come from the web.
 
 ## Planned: daily nowcast layer
 

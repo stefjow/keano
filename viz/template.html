@@ -1,0 +1,915 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>keano — global NO₂ hexagon map</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/h3-js@4.5.0/dist/h3-js.umd.js"></script>
+<style>
+  /* Committed single dark theme: a satellite-data viewer. */
+  :root {
+    --ground:  #0a1014;
+    --panel:   #111a20;
+    --panel-2: #16222a;
+    --line:    #223038;
+    --ink:     #d5e3e1;
+    --muted:   #6e8489;
+    --accent:  #4fd6c2;   /* ke anu teal */
+    --warn:    #e8873c;   /* worsening (semantic, not accent) */
+    --mono: "SF Mono", "Cascadia Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
+    --sans: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* --- Top bar --------------------------------------------------------- */
+  header {
+    display: flex; align-items: center; gap: 20px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    flex-wrap: wrap;
+    z-index: 10;
+  }
+  .wordmark { display: flex; align-items: baseline; gap: 10px; }
+  .wordmark b {
+    font-family: var(--mono);
+    font-size: 19px; font-weight: 600; letter-spacing: 0.04em;
+    color: var(--accent);
+  }
+  .wordmark span { color: var(--muted); font-size: 12px; }
+  .month-chip {
+    font-family: var(--mono); font-size: 12px;
+    padding: 3px 9px;
+    border: 1px solid var(--line); border-radius: 3px;
+    color: var(--ink); background: var(--panel-2);
+    white-space: nowrap;
+  }
+  .layers { display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .layers button {
+    padding: 6px 13px;
+    font-size: 12.5px;
+    color: var(--muted);
+    border-right: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .layers button:last-child { border-right: none; }
+  .layers button[aria-pressed="true"] { background: var(--panel-2); color: var(--accent); }
+  .legend { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .legend canvas { border-radius: 2px; }
+  .legend .lab {
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* --- Map stage --------------------------------------------------------- */
+  main { position: relative; flex: 1; min-height: 0; }
+  #map { position: absolute; inset: 0; }
+  #map .maplibregl-ctrl-attrib {
+    background: rgba(10, 16, 20, 0.75); font-size: 10px;
+  }
+  #map .maplibregl-ctrl-attrib a { color: var(--muted); }
+
+  #loading {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--ground);
+    color: var(--muted);
+    font-family: var(--mono); font-size: 13px;
+    z-index: 20;
+  }
+
+  /* --- Region hover panel ------------------------------------------------ */
+  #region-panel {
+    position: absolute; left: 12px; bottom: 26px;
+    width: 336px;
+    background: rgba(17, 26, 32, 0.94);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 11px 12px;
+    z-index: 4;
+  }
+  #region-panel[hidden] { display: none; }
+  #region-panel .rp-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 8px;
+  }
+  #region-panel .rp-head b {
+    font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  #region-panel .rp-head span {
+    font-size: 10.5px; color: var(--muted);
+    letter-spacing: 0.07em; text-transform: uppercase; white-space: nowrap;
+  }
+  .rp-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 9px; }
+  .rp-metrics div {
+    background: var(--panel-2);
+    border-radius: 3px;
+    padding: 5px 6px;
+  }
+  .rp-metrics .k {
+    display: block; font-size: 9.5px; color: var(--muted);
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .rp-metrics .v {
+    font-family: var(--mono); font-size: 12px;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  #region-panel canvas { width: 100%; display: block; }
+  #region-panel .rp-note {
+    margin-top: 5px; font-size: 10.5px; color: var(--muted);
+  }
+
+  /* --- Side panel --------------------------------------------------------- */
+  aside {
+    position: absolute; top: 12px; right: 12px;
+    width: 330px; max-height: calc(100% - 24px);
+    display: flex; flex-direction: column;
+    background: rgba(17, 26, 32, 0.94);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    overflow: hidden;
+    z-index: 4;
+  }
+  aside.collapsed .body { display: none; }
+  aside .head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  aside.collapsed .head { border-bottom: none; }
+  aside .head h2 { font-size: 12px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  aside .head button { color: var(--muted); font-family: var(--mono); padding: 0 4px; }
+  aside .body { overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 16px; }
+  .chart-block h3, .top-block h3 {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .chart-block .now {
+    font-family: var(--mono); font-size: 12px;
+    float: right; font-variant-numeric: tabular-nums;
+  }
+  .chart-block canvas { width: 100%; display: block; }
+
+  .top-block table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .top-block td {
+    padding: 4px 2px;
+    border-bottom: 1px solid var(--line);
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .top-block tr:last-child td { border-bottom: none; }
+  .top-block .rk { color: var(--muted); width: 22px; }
+  .top-block .cr { color: var(--accent); text-align: right; }
+  .top-block button.loc {
+    color: var(--muted);
+    border: 1px solid var(--line); border-radius: 3px;
+    font-size: 11px; line-height: 1;
+    padding: 3px 6px;
+  }
+  .top-block button.loc:hover { color: var(--accent); border-color: var(--accent); }
+  .top-block .note { color: var(--muted); font-size: 11px; margin-top: 6px; line-height: 1.5; }
+
+  /* --- Footer --------------------------------------------------------- */
+  footer {
+    display: flex; gap: 22px; align-items: baseline;
+    padding: 7px 16px;
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+    font-size: 11.5px; color: var(--muted);
+    flex-wrap: wrap;
+    z-index: 10;
+  }
+  footer b { color: var(--ink); font-family: var(--mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+  footer .gen { margin-left: auto; }
+
+  @media (max-width: 860px) {
+    aside { display: none; }
+    #region-panel { width: calc(100% - 24px); }
+    .legend { margin-left: 0; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .layers button, .top-block button.loc { transition: color 120ms, background 120ms, border-color 120ms; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wordmark"><b>keano</b><span>global NO₂ · H3 reduction panel</span></div>
+  <span class="month-chip" id="month-chip"></span>
+  <div class="layers" role="group" aria-label="Map layer" id="layer-buttons"></div>
+  <div class="legend">
+    <span class="lab" id="legend-min"></span>
+    <canvas id="legend-bar" width="150" height="10"></canvas>
+    <span class="lab" id="legend-max"></span>
+  </div>
+</header>
+
+<main>
+  <div id="map"></div>
+  <div id="loading">inflating hexagon data …</div>
+
+  <div id="region-panel" hidden>
+    <div class="rp-head"><b id="rp-title"></b><span id="rp-sub"></span></div>
+    <div class="rp-metrics" id="rp-metrics"></div>
+    <canvas id="rp-chart" height="84"></canvas>
+    <p class="rp-note" id="rp-note"></p>
+  </div>
+
+  <aside id="panel">
+    <div class="head">
+      <h2>Global signal</h2>
+      <button id="panel-toggle" aria-label="Collapse panel">–</button>
+    </div>
+    <div class="body">
+      <div class="chart-block">
+        <h3>Mean YoY change, eligible cells <span class="now" id="perf-now"></span></h3>
+        <canvas id="chart-perf" height="74"></canvas>
+      </div>
+      <div class="chart-block">
+        <h3>Total credit issued <span class="now" id="credit-now"></span></h3>
+        <canvas id="chart-credit" height="74"></canvas>
+      </div>
+      <div class="top-block">
+        <h3 id="top-title">Top credits</h3>
+        <table id="top-table"></table>
+        <p class="note">Credit = relative undercut of the cell’s own 5-year
+        baseline. Click → to fly to the cell.</p>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<footer id="stats"></footer>
+
+<script id="keano-meta" type="application/json">__KEANO_META__</script>
+<script id="keano-bin" type="text/plain">__KEANO_BIN__</script>
+<script>
+"use strict";
+(function () {
+  const loading = document.getElementById("loading");
+  if (!window.maplibregl || !window.h3) {
+    loading.textContent =
+      "MapLibre / h3-js could not be loaded — this page needs internet access for its map libraries.";
+    throw new Error("CDN libraries missing");
+  }
+  if (typeof DecompressionStream === "undefined") {
+    loading.textContent =
+      "This browser lacks DecompressionStream — please use a current Chrome, Firefox, Edge or Safari.";
+    throw new Error("DecompressionStream missing");
+  }
+})();
+
+const META = JSON.parse(document.getElementById("keano-meta").textContent);
+const S = META.scales;
+const NM = META.months.length;
+const NP = META.nP;
+
+/* Resolution ladder: each res step is a 7x density jump ~ 1.4 zoom levels.
+   Feature counts per viewport stay bounded (< ~50k even on a 4k screen). */
+const Z4 = 5.0, Z5 = 6.2, Z6 = 7.4;
+const FEAT_CAP = 60000;   // uniform-stride thinning beyond this, never truncation
+
+/* --- Binary container ------------------------------------------------------ */
+/* One zlib/gzip-compressed blob: per-tier occupancy bitmaps + delta-encoded
+   quantized metric planes (u8, res-3 series u16). 0 = NA. */
+function b64bytes(b64) {
+  const bin = atob(b64), a = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+  return a;
+}
+async function inflateContainer() {
+  const el = document.getElementById("keano-bin");
+  const packed = b64bytes(el.textContent.trim());
+  el.remove();
+  const format = packed[0] === 0x1f && packed[1] === 0x8b ? "gzip" : "deflate";
+  const buf = await new Response(
+    new Blob([packed]).stream().pipeThrough(new DecompressionStream(format))
+  ).arrayBuffer();
+  const bin = new Uint8Array(buf);
+  if (bin.length !== META.bin_len)
+    throw new Error("payload length mismatch: " + bin.length + " vs " + META.bin_len);
+  return bin;
+}
+
+const SEC = {};
+META.manifest.forEach(([name, off, len]) => { SEC[name] = [off, len]; });
+const secBytes = (bin, name) => {
+  const [off, len] = SEC[name];
+  return bin.subarray(off, off + len);
+};
+function undelta8(a) {
+  let acc = 0;
+  for (let i = 0; i < a.length; i++) { acc = (acc + a[i]) & 255; a[i] = acc; }
+  return a;
+}
+function secU8(bin, name) { return undelta8(secBytes(bin, name)); }
+function secU16(bin, name) {
+  const [off, len] = SEC[name];
+  const a = new Uint16Array(bin.slice(off, off + len).buffer);  // aligned copy
+  let acc = 0;
+  for (let i = 0; i < a.length; i++) { acc = (acc + a[i]) & 65535; a[i] = acc; }
+  return a;
+}
+const lev2t8 = lev => lev === 0 ? -1 : (lev - 1) / 254;     // -1 = no data
+const lev2t16 = lev => lev === 0 ? -1 : (lev - 1) / 65533;
+
+/* Decoded globals, filled by setupData() */
+let R3 = null;          // { ids, tm, ty, tt, tc, series }
+const TIERS = {};       // res -> { B, bm, off, tm, ty, tt, tc }
+const r3Index = new Map();
+let r3Lat = null, r3Lng = null;
+const idAt3 = j => R3.ids.substr(j * 15, 15);
+
+function buildTier(bin, r, B) {
+  const bm = secBytes(bin, "bm" + r);
+  const POP = new Uint8Array(256);
+  for (let i = 1; i < 256; i++) POP[i] = POP[i >> 1] + (i & 1);
+  const off = new Uint32Array(NP + 1);
+  let acc = 0;
+  for (let j = 0; j < NP; j++) {
+    off[j] = acc;
+    for (let b = 0; b < B; b++) acc += POP[bm[j * B + b]];
+  }
+  off[NP] = acc;
+  if (acc !== META.n[r]) throw new Error("tier " + r + " bitmap/plane mismatch");
+  return {
+    B, bm, off,
+    tm: secU8(bin, "tm" + r), ty: secU8(bin, "ty" + r),
+    tt: secU8(bin, "tt" + r), tc: secU8(bin, "tc" + r)
+  };
+}
+
+function setupData(bin) {
+  R3 = {
+    ids: new TextDecoder("ascii").decode(secBytes(bin, "r3ids")),
+    tm: secU8(bin, "tm3"), ty: secU8(bin, "ty3"),
+    tt: secU8(bin, "tt3"), tc: secU8(bin, "tc3"),
+    series: secU16(bin, "r3series")
+  };
+  TIERS[4] = buildTier(bin, 4, 1);
+  TIERS[5] = buildTier(bin, 5, 8);
+  TIERS[6] = buildTier(bin, 6, 64);
+  r3Lat = new Float64Array(NP);
+  r3Lng = new Float64Array(NP);
+  for (let j = 0; j < NP; j++) {
+    const id = idAt3(j);
+    r3Index.set(id, j);
+    const [la, lo] = h3.cellToLatLng(id);
+    r3Lat[j] = la; r3Lng[j] = lo;
+  }
+}
+
+/* --- H3 id reconstruction (mirrors child_id() in 06_viz.R, self-tested there
+   against h3jsr; H3 v4 bit layout is fixed) -------------------------------- */
+const HEX = "0123456789abcdef";
+function childId(parent, r, k) {
+  const b = parent.slice(2, 6);
+  if (r === 4) return "84" + b + HEX[(k << 1) | 1] + "ffffffff";
+  if (r === 5) return "85" + b + HEX[k >> 2] + HEX[((k & 3) << 2) | 3] + "fffffff";
+  return "86" + b + HEX[k >> 5] + HEX[(k >> 1) & 15] +
+         HEX[((k & 1) << 3) | 7] + "ffffff";
+}
+const parentR3 = id => "83" + id.slice(2, 6) + "fffffffff";
+
+/* --- Value decoding + formatting ------------------------------------------ */
+const dec = {
+  m:      t => Math.pow(10, S.m.lmin + t * (S.m.lmax - S.m.lmin)),
+  yoy:    t => (t * 2 - 1) * S.yoy.sym,
+  trend:  t => (t * 2 - 1) * S.trend.sym,
+  credit3: t => t * t * S.credit3.max,
+  credit4: t => t * t * S.credit4.max,
+  credit5: t => t * t * S.credit5.max,
+  credit6: t => t * t * S.credit6.max
+};
+const sumFmt = v => "Σ " + (v >= 10 ? v.toFixed(0) : v.toFixed(2));
+const fmt = {
+  m:      v => (v >= 100 ? v.toFixed(0) : v.toFixed(1)),
+  yoy:    v => (v > 0 ? "+" : "") + (v * 100).toFixed(1) + "%",
+  trend:  v => (v > 0 ? "+" : "") + (v * 100).toFixed(1) + "%",
+  credit3: sumFmt, credit4: sumFmt, credit5: sumFmt,
+  credit6: v => (v * 100).toFixed(1) + "%"
+};
+function fmtCoord(lat, lng) {
+  return Math.abs(lat).toFixed(2) + "°" + (lat >= 0 ? "N" : "S") + " " +
+         Math.abs(lng).toFixed(2) + "°" + (lng >= 0 ? "E" : "W");
+}
+
+/* --- Color ramps + fill expressions ---------------------------------------- */
+const RAMPS = {
+  m:      ["#131f2b", "#1c3a52", "#1f5a6d", "#2a7a70", "#4f9a62", "#8fb254", "#d3c45c", "#f9e88f", "#fffbe0"],
+  yoy:    ["#4fd6c2", "#33978c", "#26424a", "#6b4a2a", "#c87a35", "#f09a4b"],
+  trend:  ["#4fd6c2", "#33978c", "#26424a", "#6b4a2a", "#c87a35", "#f09a4b"],
+  credit: ["#13272c", "#155e56", "#27a08c", "#5fd6bd", "#c9fff1"]
+};
+const LAYERS = [
+  { key: "m",      prop: "tm", label: "NO₂ level" },
+  { key: "yoy",    prop: "ty", label: "Year over year" },
+  { key: "trend",  prop: "tt", label: "Long-term trend" },
+  { key: "credit", prop: "tc", label: "Credit" }
+];
+let activeLayer = LAYERS.some(l => l.key === location.hash.slice(1))
+  ? location.hash.slice(1) : "m";
+const layerDef = key => LAYERS.find(l => l.key === key);
+
+function fillExpr(key) {
+  const e = ["interpolate", ["linear"], ["get", layerDef(key).prop]];
+  RAMPS[key].forEach((c, i) => e.push(i / (RAMPS[key].length - 1), c));
+  return ["case", ["<", ["get", layerDef(key).prop], 0], "rgba(0,0,0,0)", e];
+}
+
+/* --- Hexagon geometry (client-side from H3 ids) ----------------------------- */
+function hexRing(id) {
+  const ring = h3.cellToBoundary(id, true);   // closed [lng, lat] loop
+  let lo = 180, hi = -180;
+  for (const p of ring) { if (p[0] < lo) lo = p[0]; if (p[0] > hi) hi = p[0]; }
+  if (hi - lo > 180) for (const p of ring) if (p[0] < 0) p[0] += 360;
+  return ring;
+}
+function buildR3() {
+  const feats = new Array(NP);
+  for (let j = 0; j < NP; j++) {
+    const id = idAt3(j);
+    feats[j] = {
+      type: "Feature", id: j,
+      properties: {
+        id,
+        tm: lev2t8(R3.tm[j]), ty: lev2t8(R3.ty[j]),
+        tt: lev2t8(R3.tt[j]), tc: lev2t8(R3.tc[j])
+      },
+      geometry: { type: "Polygon", coordinates: [hexRing(id)] }
+    };
+  }
+  return { type: "FeatureCollection", features: feats };
+}
+
+/* --- Map -------------------------------------------------------------------- */
+const map = new maplibregl.Map({
+  container: "map",
+  style: {
+    version: 8,
+    sources: {
+      basemap: {
+        type: "raster",
+        tiles: ["a", "b", "c", "d"].map(s =>
+          `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png`),
+        tileSize: 256, maxzoom: 19,
+        attribution: "© OpenStreetMap contributors © CARTO"
+      }
+    },
+    layers: [
+      { id: "bg", type: "background", paint: { "background-color": "#0a1014" } },
+      { id: "basemap", type: "raster", source: "basemap",
+        paint: { "raster-opacity": 0.85 } }
+    ]
+  },
+  center: [12, 30], zoom: 1.6, minZoom: 1, maxZoom: 13,
+  attributionControl: false
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }));
+map.addControl(new maplibregl.AttributionControl({ compact: true }));
+
+const EMPTY = { type: "FeatureCollection", features: [] };
+function displayRes() {
+  const z = map.getZoom();
+  return z < Z4 ? 3 : z < Z5 ? 4 : z < Z6 ? 5 : 6;
+}
+
+Promise.all([
+  inflateContainer().then(bin => {
+    setupData(bin);
+    loading.textContent = "building hexagons …";
+  }),
+  new Promise(resolve => map.on("load", resolve))
+]).then(setupMap)
+  .catch(err => { loading.textContent = "failed to load: " + err.message; throw err; });
+
+const loading = document.getElementById("loading");
+function setupMap() {
+  map.addSource("r3", { type: "geojson", data: buildR3() });
+  map.addSource("fine", { type: "geojson", data: EMPTY });
+
+  const hoverOpacity = base =>
+    ["case", ["boolean", ["feature-state", "hover"], false], 1, base];
+
+  map.addLayer({
+    id: "r3-fill", type: "fill", source: "r3", maxzoom: Z4 + 0.4,
+    paint: { "fill-color": fillExpr(activeLayer),
+             "fill-opacity": hoverOpacity(0.72) }
+  });
+  map.addLayer({
+    id: "r3-line", type: "line", source: "r3",
+    minzoom: 3, maxzoom: Z4 + 0.4,
+    paint: { "line-color": "rgba(213,227,225,0.14)", "line-width": 0.5 }
+  });
+  map.addLayer({
+    id: "fine-fill", type: "fill", source: "fine", minzoom: Z4,
+    paint: { "fill-color": fillExpr(activeLayer),
+             "fill-opacity": hoverOpacity(0.8) }
+  });
+  map.addLayer({
+    id: "fine-line", type: "line", source: "fine", minzoom: 7.5,
+    paint: { "line-color": "rgba(213,227,225,0.22)", "line-width": 0.5 }
+  });
+
+  map.on("moveend", updateFine);
+  map.on("mousemove", onHover);
+  map.on("zoomend", () => { if (activeLayer === "credit") drawLegend(); });
+  updateFine();
+  loading.remove();
+}
+
+/* --- Fine-tier viewport source ------------------------------------------------ */
+/* Rebuilds the "fine" source from the tier matching the zoom: scan res-3
+   parent centers against the (padded) viewport, then enumerate their children
+   from the occupancy bitmap. Indexing by parent means no linear scan over
+   12M cells, and thinning (rare) is uniform — no truncated regions. */
+let fineTier = 3;
+function updateFine() {
+  const r = displayRes();
+  if (r === 3) {
+    if (fineTier !== 3) {
+      setHover(null);
+      map.getSource("fine").setData(EMPTY);
+      fineTier = 3;
+    }
+    return;
+  }
+  const T = TIERS[r];
+  const b = map.getBounds();
+  let w = b.getWest(), e = b.getEast();
+  const s = b.getSouth(), n = b.getNorth();
+  if (e - w >= 360) { w = -180; e = 180; }
+
+  /* padding: res-3 circumradius (~0.65°) + child overhang, in degrees */
+  const PAD = 1.0;
+  const visible = [];
+  let total = 0;
+  for (let j = 0; j < NP; j++) {
+    const la = r3Lat[j];
+    if (la < s - PAD || la > n + PAD) continue;
+    const padLng = Math.min(8, PAD / Math.max(0.15, Math.cos(la * Math.PI / 180)));
+    const lo = r3Lng[j];
+    if (!(lo >= w - padLng && lo <= e + padLng) &&
+        !(lo + 360 >= w - padLng && lo + 360 <= e + padLng) &&
+        !(lo - 360 >= w - padLng && lo - 360 <= e + padLng)) continue;
+    const count = T.off[j + 1] - T.off[j];
+    if (count > 0) { visible.push(j); total += count; }
+  }
+
+  const stride = Math.max(1, Math.ceil(total / FEAT_CAP));
+  const feats = [];
+  for (const j of visible) {
+    const parent = idAt3(j), base = j * T.B;
+    let idx = T.off[j];
+    for (let by = 0; by < T.B; by++) {
+      const v = T.bm[base + by];
+      if (v === 0) continue;
+      for (let bit = 0; bit < 8; bit++) {
+        if (!(v >> bit & 1)) continue;
+        if (idx % stride === 0) {
+          const id = childId(parent, r, by * 8 + bit);
+          feats.push({
+            type: "Feature", id: idx,
+            properties: {
+              id,
+              tm: lev2t8(T.tm[idx]), ty: lev2t8(T.ty[idx]),
+              tt: lev2t8(T.tt[idx]), tc: lev2t8(T.tc[idx])
+            },
+            geometry: { type: "Polygon", coordinates: [hexRing(id)] }
+          });
+        }
+        idx++;
+      }
+    }
+  }
+  setHover(null);
+  map.getSource("fine").setData({ type: "FeatureCollection", features: feats });
+  fineTier = r;
+}
+
+/* --- Hover: highlight + region panel ------------------------------------------ */
+let hovered = null;   // {source, id}
+function setHover(next) {
+  if (hovered && (!next || hovered.source !== next.source || hovered.id !== next.id)) {
+    map.setFeatureState(hovered, { hover: false });
+    hovered = null;
+  }
+  if (next && !hovered) {
+    map.setFeatureState(next, { hover: true });
+    hovered = next;
+  }
+}
+function onHover(e) {
+  const feats = map.queryRenderedFeatures(e.point, { layers: ["fine-fill", "r3-fill"] });
+  const f = feats.find(x => x.layer.id === "fine-fill") ||
+            feats.find(x => x.layer.id === "r3-fill");
+  if (!f) {
+    setHover(null);
+    map.getCanvas().style.cursor = "";
+    return;
+  }
+  map.getCanvas().style.cursor = "crosshair";
+  setHover({ source: f.layer.id === "fine-fill" ? "fine" : "r3", id: f.id });
+  showRegion(f);
+}
+
+const rp = {
+  panel: document.getElementById("region-panel"),
+  title: document.getElementById("rp-title"),
+  sub: document.getElementById("rp-sub"),
+  metrics: document.getElementById("rp-metrics"),
+  chart: document.getElementById("rp-chart"),
+  note: document.getElementById("rp-note")
+};
+const AREA = { 3: "~12 400 km²", 4: "~1 770 km²", 5: "~250 km²", 6: "~36 km²" };
+let shownRegion = null;
+function showRegion(f) {
+  const P = f.properties;
+  if (shownRegion === P.id) return;
+  shownRegion = P.id;
+  const res = h3.getResolution(P.id);
+  const [lat, lng] = h3.cellToLatLng(P.id);
+  const credKey = "credit" + res;
+  rp.title.textContent = fmtCoord(lat, lng);
+  rp.sub.textContent = (res === 6 ? "cell" : "region") +
+                       " · res " + res + " · " + AREA[res];
+
+  const cards = [
+    ["NO₂ m", "m", P.tm, "µmol/m²"],
+    ["YoY", "yoy", P.ty, ""],
+    ["Trend", "trend", P.tt, "/yr"],
+    ["Credit", credKey, P.tc, ""]
+  ];
+  rp.metrics.textContent = "";
+  for (const [label, key, t, unit] of cards) {
+    const d = document.createElement("div");
+    const k = document.createElement("span"); k.className = "k"; k.textContent = label;
+    const v = document.createElement("span"); v.className = "v";
+    v.textContent = t < 0 ? "–" : fmt[key](dec[key](t)) + unit;
+    d.append(k, v);
+    rp.metrics.appendChild(d);
+  }
+
+  const r3i = r3Index.get(res === 3 ? P.id : parentR3(P.id));
+  const cellNow = res > 3 && P.tm >= 0 ? dec.m(P.tm) : null;
+  drawRegionChart(r3i, cellNow);
+  rp.note.textContent = (res > 3
+    ? "12-month mean NO₂ of the surrounding res-3 region · □ this " +
+      (res === 6 ? "cell" : "res-" + res + " region") + " now, "
+    : "12-month mean NO₂ (m), ") +
+    META.months[0] + " … " + META.months[NM - 1];
+  rp.panel.hidden = false;
+}
+
+function drawRegionChart(r3i, cellNow) {
+  const cv = rp.chart, dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth || 310, H = 84;
+  cv.width = W * dpr; cv.style.height = H + "px"; cv.height = H * dpr;
+  const c = cv.getContext("2d");
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (r3i === undefined) return;
+
+  const vals = new Array(NM);
+  let lo = Infinity, hi = -Infinity, any = false;
+  for (let j = 0; j < NM; j++) {
+    const t = lev2t16(R3.series[r3i * NM + j]);
+    vals[j] = t < 0 ? NaN : dec.m(t);
+    if (!isNaN(vals[j])) {
+      any = true;
+      if (vals[j] < lo) lo = vals[j];
+      if (vals[j] > hi) hi = vals[j];
+    }
+  }
+  if (!any) return;
+  if (cellNow != null) {           // keep the hovered cell's marker in range
+    if (cellNow < lo) lo = cellNow;
+    if (cellNow > hi) hi = cellNow;
+  }
+  if (hi - lo < 1e-9) hi = lo + 1;
+  const padB = 13, ih = H - padB;
+  const X = j => j / (NM - 1) * (W - 44) + 1;
+  const Y = v => ih - (v - lo) / (hi - lo) * (ih - 8) - 3;
+
+  c.font = "9.5px " + getComputedStyle(document.body).getPropertyValue("--mono");
+  c.strokeStyle = "#223038"; c.fillStyle = "#6e8489"; c.lineWidth = 1;
+  META.months.forEach((mth, j) => {
+    if (mth.slice(5) === "01" && +mth.slice(0, 4) % 2 === 0) {
+      c.beginPath(); c.moveTo(X(j), 0); c.lineTo(X(j), ih); c.stroke();
+      c.fillText(mth.slice(0, 4), Math.min(X(j) + 3, W - 66), H - 3);
+    }
+  });
+
+  c.beginPath();
+  let pen = false;
+  for (let j = 0; j < NM; j++) {
+    if (isNaN(vals[j])) { pen = false; continue; }
+    pen ? c.lineTo(X(j), Y(vals[j])) : c.moveTo(X(j), Y(vals[j]));
+    pen = true;
+  }
+  c.strokeStyle = "#4fd6c2"; c.lineWidth = 1.4; c.stroke();
+
+  let lastJ = NM - 1;
+  while (lastJ >= 0 && isNaN(vals[lastJ])) lastJ--;
+  if (lastJ >= 0) {
+    c.beginPath(); c.arc(X(lastJ), Y(vals[lastJ]), 2.4, 0, Math.PI * 2);
+    c.fillStyle = "#4fd6c2"; c.fill();
+    c.fillStyle = "#d5e3e1";
+    c.fillText(fmt.m(vals[lastJ]), X(lastJ) + 6, Y(vals[lastJ]) + 3);
+    if (cellNow != null) {
+      c.strokeStyle = "#d5e3e1"; c.lineWidth = 1.2;
+      c.strokeRect(X(lastJ) - 2.5, Y(cellNow) - 2.5, 5, 5);
+    }
+  }
+  c.fillStyle = "#6e8489";
+  c.fillText(fmt.m(hi), W - 40, 10);
+  c.fillText(fmt.m(lo), W - 40, ih - 2);
+}
+
+/* --- Layer switching + legend --------------------------------------------------- */
+const layerBtns = document.getElementById("layer-buttons");
+LAYERS.forEach(l => {
+  const b = document.createElement("button");
+  b.textContent = l.label;
+  b.setAttribute("aria-pressed", String(l.key === activeLayer));
+  b.addEventListener("click", () => {
+    activeLayer = l.key;
+    layerBtns.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", "false"));
+    b.setAttribute("aria-pressed", "true");
+    for (const id of ["r3-fill", "fine-fill"]) {
+      if (map.getLayer(id)) map.setPaintProperty(id, "fill-color", fillExpr(l.key));
+    }
+    drawLegend();
+  });
+  layerBtns.appendChild(b);
+});
+function hex2rgb(h) { return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); }
+function drawLegend() {
+  const cv = document.getElementById("legend-bar"), c = cv.getContext("2d");
+  const stops = RAMPS[activeLayer].map(hex2rgb);
+  const img = c.createImageData(cv.width, 1);
+  for (let x = 0; x < cv.width; x++) {
+    const t = x / (cv.width - 1) * (stops.length - 1);
+    const k = Math.min(Math.floor(t), stops.length - 2), f = t - k;
+    for (let ch = 0; ch < 3; ch++) {
+      img.data[x * 4 + ch] = Math.round(stops[k][ch] * (1 - f) + stops[k + 1][ch] * f);
+    }
+    img.data[x * 4 + 3] = 255;
+  }
+  for (let y = 0; y < cv.height; y++) c.putImageData(img, 0, y);
+
+  const key = activeLayer === "credit" ? "credit" + displayRes() : activeLayer;
+  document.getElementById("legend-min").textContent = fmt[key](dec[key](0));
+  document.getElementById("legend-max").textContent = fmt[key](dec[key](1));
+}
+
+/* --- Global signal charts --------------------------------------------------------- */
+function drawSeries(id, vals, months, opts) {
+  const cv = document.getElementById(id);
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth || cv.parentElement.clientWidth, H = 74;
+  cv.width = W * dpr; cv.style.height = H + "px"; cv.height = H * dpr;
+  const c = cv.getContext("2d");
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const padB = 14, ih = H - padB;
+  let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  if (hi === lo) hi = lo + 1;
+  const X = i => i / (vals.length - 1) * (W - 2) + 1;
+  const Y = v => ih - (v - lo) / (hi - lo) * (ih - 6) - 2;
+
+  c.font = "9.5px " + getComputedStyle(document.body).getPropertyValue("--mono");
+  c.fillStyle = "#6e8489"; c.strokeStyle = "#223038"; c.lineWidth = 1;
+  months.forEach((mth, i) => {
+    if (mth.slice(5) === "01" && +mth.slice(0, 4) % 2 === 0) {
+      c.beginPath(); c.moveTo(X(i), 0); c.lineTo(X(i), ih); c.stroke();
+      c.fillText(mth.slice(0, 4), Math.min(X(i) + 3, W - 26), H - 3);
+    }
+  });
+  if (lo < 0) {
+    c.strokeStyle = "#31424c";
+    c.beginPath(); c.moveTo(0, Y(0)); c.lineTo(W, Y(0)); c.stroke();
+  }
+  if (opts.diverging) {
+    for (const sgn of [1, -1]) {
+      c.beginPath(); c.moveTo(X(0), Y(0));
+      vals.forEach((v, i) => c.lineTo(X(i), Y(sgn > 0 ? Math.max(v, 0) : Math.min(v, 0))));
+      c.lineTo(X(vals.length - 1), Y(0)); c.closePath();
+      c.fillStyle = sgn > 0 ? "rgba(232,135,60,0.25)" : "rgba(79,214,194,0.25)";
+      c.fill();
+    }
+  } else {
+    c.beginPath(); c.moveTo(X(0), Y(lo < 0 ? 0 : lo));
+    vals.forEach((v, i) => c.lineTo(X(i), Y(v)));
+    c.lineTo(X(vals.length - 1), Y(lo < 0 ? 0 : lo)); c.closePath();
+    c.fillStyle = "rgba(79,214,194,0.18)"; c.fill();
+  }
+  c.beginPath();
+  vals.forEach((v, i) => i === 0 ? c.moveTo(X(i), Y(v)) : c.lineTo(X(i), Y(v)));
+  c.strokeStyle = opts.color; c.lineWidth = 1.4; c.stroke();
+  c.beginPath(); c.arc(X(vals.length - 1), Y(vals[vals.length - 1]), 2.4, 0, Math.PI * 2);
+  c.fillStyle = opts.color; c.fill();
+}
+function drawCharts() {
+  const SG = META.series_global;
+  const first = SG.findIndex(r => r.perf !== 0);
+  const sp = SG.slice(first < 0 ? 0 : first);
+  drawSeries("chart-perf", sp.map(r => r.perf * 100), sp.map(r => r.month),
+             { diverging: true, color: "#d5e3e1" });
+  drawSeries("chart-credit", SG.map(r => r.credit), SG.map(r => r.month),
+             { diverging: false, color: "#4fd6c2" });
+  const last = SG[SG.length - 1];
+  const p = document.getElementById("perf-now");
+  p.textContent = (last.perf > 0 ? "+" : "") + (last.perf * 100).toFixed(1) + "%";
+  p.style.color = last.perf > 0 ? "#e8873c" : "#4fd6c2";
+  document.getElementById("credit-now").textContent =
+    Math.round(last.credit).toLocaleString("en-US");
+}
+
+/* --- Top table + footer ------------------------------------------------------------- */
+const flyMarker = new maplibregl.Marker({ color: "#4fd6c2", scale: 0.8 });
+function monthName(m) {
+  const n = ["January","February","March","April","May","June","July",
+             "August","September","October","November","December"];
+  return n[+m.slice(5) - 1] + " " + m.slice(0, 4);
+}
+function buildTop() {
+  document.getElementById("top-title").textContent = "Top credits — " + monthName(META.month);
+  const tb = document.getElementById("top-table");
+  META.top.forEach((r, i) => {
+    const tr = document.createElement("tr");
+    const loc = document.createElement("button");
+    loc.className = "loc"; loc.textContent = "→";
+    loc.setAttribute("aria-label", "Fly to cell " + (i + 1));
+    loc.addEventListener("click", () => {
+      flyMarker.setLngLat([r.lng, r.lat]).addTo(map);
+      map.flyTo({ center: [r.lng, r.lat], zoom: 8.2 });
+    });
+    const tds = [
+      ["rk", String(i + 1)], ["", fmtCoord(r.lat, r.lng)],
+      ["cr", (r.credit * 100).toFixed(1) + "%"]
+    ].map(([cls, txt]) => {
+      const td = document.createElement("td");
+      if (cls) td.className = cls;
+      td.textContent = txt;
+      return td;
+    });
+    const tdLoc = document.createElement("td");
+    tdLoc.appendChild(loc);
+    tr.append(...tds, tdLoc);
+    tb.appendChild(tr);
+  });
+}
+function buildFooter() {
+  const s = META.stats, f = document.getElementById("stats");
+  const item = (label, val) => {
+    const sp = document.createElement("span");
+    const b = document.createElement("b");
+    b.textContent = val;
+    sp.append(b, " " + label);
+    return sp;
+  };
+  f.append(
+    item("cells observed", (s.n_cells_obs / 1e6).toFixed(1) + " M"),
+    item("eligible", Math.round(s.n_eligible / 1e3) + " k"),
+    item("record lows", Math.round(s.n_records / 1e3) + " k"),
+    item("credit issued", Math.round(s.total_credit).toLocaleString("en-US"))
+  );
+  const gen = document.createElement("span");
+  gen.className = "gen";
+  gen.textContent = META.month + " · generated " + META.generated;
+  f.append(gen);
+}
+document.getElementById("panel-toggle").addEventListener("click", () => {
+  const p = document.getElementById("panel");
+  p.classList.toggle("collapsed");
+  const btn = document.getElementById("panel-toggle");
+  const open = !p.classList.contains("collapsed");
+  btn.textContent = open ? "–" : "+";
+  btn.setAttribute("aria-label", open ? "Collapse panel" : "Expand panel");
+  if (open) drawCharts();
+});
+
+/* --- Init ------------------------------------------------------------------------------ */
+document.getElementById("month-chip").textContent = monthName(META.month);
+drawLegend(); drawCharts(); buildTop(); buildFooter();
+window.addEventListener("resize", drawCharts);
+</script>
+</body>
+</html>

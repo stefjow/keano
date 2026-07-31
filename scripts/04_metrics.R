@@ -24,11 +24,10 @@
 # ============================================================================
 
 source("config/config.R")
-loadPackages(c("data.table", "arrow", "dplyr"))
+loadPackages(c("data.table", "arrow", "dplyr", "parallel"))
 
 ensure_dir(DATA_METRICS)
 
-panel = open_dataset(DATA_PANEL)
 cells = as.data.table(read_parquet(file.path(DATA_LOOKUP, "cells.parquet")))
 
 months_all = months_in_dataset(DATA_PANEL)
@@ -41,21 +40,24 @@ message("Month axis: ", index_to_label(midx_full[1]), " .. ",
         " (", length(midx_full), " months)")
 
 shards = sort(unique(cells$shard))
+# Slim per-shard cell lists — all the workers need from the cells table
+shard_cells = split(cells$cell_id, cells$shard)
 
-for (s_i in seq_along(shards)) {
-  s = shards[s_i]
+# One shard's full history per worker (PSOCK; see script 03 on why not fork).
+# The panel dataset handle is created inside each worker.
+do_shard = function(s) {
   t0 = Sys.time()
 
-  pnl = panel |>
+  pnl = open_dataset(DATA_PANEL) |>
     filter(shard == s) |>
     select(cell_id, no2, n_pix, month) |>
     collect() |>
     as.data.table()
-  if (nrow(pnl) == 0) next
+  if (nrow(pnl) == 0) return(NULL)
   pnl[, midx := month_index(month)][, month := NULL]
 
   # Balanced grid: all cells of the shard x all months
-  dt = CJ(cell_id = cells[shard == s, cell_id], midx = midx_full)
+  dt = CJ(cell_id = shard_cells[[s]], midx = midx_full)
   dt = pnl[dt, on = c("cell_id", "midx")]
   setkey(dt, cell_id, midx)
 
@@ -102,13 +104,31 @@ for (s_i in seq_along(shards)) {
   shard_dir = ensure_dir(file.path(DATA_METRICS, paste0("shard=", s)))
   write_parquet(out, file.path(shard_dir, "part-0.parquet"))
 
-  message(sprintf("[%d/%d] %s: %s cells, %s records, %.1fs",
-                  s_i, length(shards), s,
+  message(sprintf("[%s] %s cells, %s records, %.1fs", s,
                   format(uniqueN(out$cell_id), big.mark = ","),
                   format(sum(out$is_record), big.mark = ","),
                   as.numeric(Sys.time() - t0, units = "secs")))
-
-  rm(pnl, dt, out)
+  s
 }
 
-message("Metrics written to ", DATA_METRICS)
+cl = makeCluster(max(1L, min(N_WORKERS, length(shards))), outfile = "")
+clusterExport(cl, c("do_shard", "shard_cells", "midx_full", "DATA_PANEL",
+                    "DATA_METRICS", "WINDOW_MONTHS", "MIN_MONTHS_IN_WINDOW",
+                    "BASELINE_WINDOW_MONTHS", "BASELINE_EXCLUDE_MONTHS",
+                    "CREDIT_MARGIN", "NO2_FLOOR",
+                    "month_index", "index_to_label", "roll_min_adaptive",
+                    "ensure_dir"))
+invisible(clusterEvalQ(cl, suppressMessages({
+  library(data.table); library(arrow); library(dplyr)
+  setDTthreads(2); set_cpu_count(2)
+})))
+res = parLapplyLB(cl, shards, function(s) try(do_shard(s), silent = TRUE))
+stopCluster(cl)
+failed = vapply(res, inherits, TRUE, "try-error")
+if (any(failed)) {
+  stop("Failed shards:\n",
+       paste(unlist(lapply(res[failed], as.character)), collapse = "\n"))
+}
+
+message("Metrics written to ", DATA_METRICS, " (",
+        sum(!vapply(res, is.null, TRUE)), " non-empty shards)")

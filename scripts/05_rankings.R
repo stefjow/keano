@@ -13,42 +13,53 @@
 # ============================================================================
 
 source("config/config.R")
-loadPackages(c("data.table", "arrow", "dplyr"))
+loadPackages(c("data.table", "arrow", "dplyr", "parallel"))
 
 ensure_dir(DATA_RANKINGS)
 ensure_dir(TMP_DIR)
 
-metrics = open_dataset(DATA_METRICS)
 cells = as.data.table(read_parquet(file.path(DATA_LOOKUP, "cells.parquet")))
 shards = sort(unique(cells$shard))
 
-sum_list = list()
-rec_list = list()
-
-for (s_i in seq_along(shards)) {
-  s = shards[s_i]
-  mt = metrics |>
+scan_shard = function(s) {
+  mt = open_dataset(DATA_METRICS) |>
     filter(shard == s) |>
     select(cell_id, month, no2, m, perf_short, baseline,
            credit, eligible, is_record) |>
     collect() |>
     as.data.table()
-  if (nrow(mt) == 0) next
+  if (nrow(mt) == 0) return(NULL)
 
-  sum_list[[s]] = mt[, .(
-    n_cells_obs    = sum(!is.na(no2)),
-    n_eligible     = sum(eligible, na.rm = TRUE),
-    n_records      = sum(is_record),
-    total_credit   = sum(credit, na.rm = TRUE),
-    sum_perf_short = sum(perf_short[eligible & !is.na(perf_short)]),
-    n_perf_short   = sum(eligible & !is.na(perf_short))
-  ), by = month]
-
-  rec_list[[s]] = mt[is_record == TRUE,
-                     .(cell_id, month, no2, m, baseline, credit)]
-
-  if (s_i %% 20 == 0) message("  scanned ", s_i, "/", length(shards), " shards")
+  list(
+    sum = mt[, .(
+      n_cells_obs    = sum(!is.na(no2)),
+      n_eligible     = sum(eligible, na.rm = TRUE),
+      n_records      = sum(is_record),
+      total_credit   = sum(credit, na.rm = TRUE),
+      sum_perf_short = sum(perf_short[eligible & !is.na(perf_short)]),
+      n_perf_short   = sum(eligible & !is.na(perf_short))
+    ), by = month],
+    rec = mt[is_record == TRUE, .(cell_id, month, no2, m, baseline, credit)]
+  )
 }
+
+# PSOCK, not fork (see script 03): arrow used pre-fork deadlocks in children
+cl = makeCluster(max(1L, min(N_WORKERS, length(shards))), outfile = "")
+clusterExport(cl, c("scan_shard", "DATA_METRICS"))
+invisible(clusterEvalQ(cl, suppressMessages({
+  library(data.table); library(arrow); library(dplyr)
+  setDTthreads(2); set_cpu_count(2)
+})))
+scans = parLapplyLB(cl, shards, function(s) try(scan_shard(s), silent = TRUE))
+stopCluster(cl)
+failed = vapply(scans, inherits, TRUE, "try-error")
+if (any(failed)) {
+  stop("Failed shards:\n",
+       paste(unlist(lapply(scans[failed], as.character)), collapse = "\n"))
+}
+scans = scans[!vapply(scans, is.null, TRUE)]
+sum_list = lapply(scans, `[[`, "sum")
+rec_list = lapply(scans, `[[`, "rec")
 
 # --- Monthly summary ----------------------------------------------------------
 monthly = rbindlist(sum_list)[, .(

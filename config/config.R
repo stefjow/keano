@@ -9,11 +9,14 @@
 source("_share.r")
 
 # --- Paths ------------------------------------------------------------------
-DATA_RAW      = "data/raw"       # append-only archive of monthly global GeoTIFFs
+DATA_RAW      = "/path/to/raw"  # append-only archive of monthly global GeoTIFFs (network share)
+DATA_CACHE    = "data/raw_cache" # local staging copy for compute (safe to delete)
 DATA_LOOKUP   = "data/lookup"    # one-time pixel -> H3 lookup + cell table
 DATA_PANEL    = "data/panel"     # hive parquet: month=YYYY-MM/shard=<h3res0>
 DATA_METRICS  = "data/metrics"   # hive parquet: shard=<h3res0>
 DATA_RANKINGS = "data/rankings"  # derived views (CSV)
+DATA_VIZ      = "data/viz"       # self-contained HTML map (derived view)
+PUBLISH_DIR   = "/path/to/publish"  # published views (network share)
 TMP_DIR       = "tmp"            # diagnostics, previews
 
 # --- Data source ------------------------------------------------------------
@@ -23,8 +26,11 @@ START_DATE     = "2018-05-01"                    # product start
 END_DATE       = format(Sys.Date(), "%Y-%m-%d")
 
 # --- Grid -------------------------------------------------------------------
-H3_RESOLUTION    = 6   # ~36 km² hexagons; matches native ~0.05° pixel size
+H3_RESOLUTION    = 6   # ~36 km² hexagons; ~7 native 0.02° pixels per hex
 SHARD_RESOLUTION = 0   # panel/metrics partition key: res-0 parent (122 shards)
+
+# --- Compute ------------------------------------------------------------------
+N_WORKERS = 32  # parallel workers for lookup/panel/metrics/rankings
 
 # --- Metrics (causal; see README "History consistency") ----------------------
 WINDOW_MONTHS           = 12    # trailing mean window; deseasonalizes by construction

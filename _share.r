@@ -47,6 +47,24 @@ roll_min_adaptive = function(x, n) {
   out
 }
 
+#' Copy raw files to a local cache and return the cache paths. DATA_RAW may
+#' live on a network share (SMB), which is latency-bound and collapses under
+#' many concurrent GDAL readers — compute must read local copies. Sizes are
+#' compared so interrupted copies are redone; the cache is safe to delete.
+stage_raw = function(files, cache_dir, workers = 4) {
+  ensure_dir(cache_dir)
+  dest = file.path(cache_dir, basename(files))
+  todo = which(!file.exists(dest) | file.size(dest) != file.size(files))
+  if (length(todo) > 0) {
+    message("Staging ", length(todo), " files to ", cache_dir, " ...")
+    ok = unlist(parallel::mclapply(todo, function(i)
+      file.copy(files[i], dest[i], overwrite = TRUE),
+      mc.cores = min(workers, length(todo))))
+    if (!all(ok)) stop("Failed to stage ", sum(!ok), " files")
+  }
+  dest
+}
+
 #' Months ("YYYY-MM") already present in a hive-partitioned dataset directory
 months_in_dataset = function(path) {
   dirs = list.dirs(path, recursive = FALSE, full.names = FALSE)

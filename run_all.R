@@ -16,3 +16,5 @@ if (!file.exists(file.path("data/lookup", "pixel_cell.parquet"))) {
 source("scripts/03_build_panel.R")
 source("scripts/04_metrics.R")
 source("scripts/05_rankings.R")
+source("scripts/06_viz.R")
+source("scripts/07_publish.R")

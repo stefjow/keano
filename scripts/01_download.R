@@ -14,25 +14,29 @@ ensure_dir(DATA_RAW)
 ensure_dir(file.path(TMP_DIR, "previews"))
 
 # --- Determine the incremental date range -----------------------------------
-existing = list.files(DATA_RAW, pattern = "^no2_monthly_\\d{8}.*\\.tif$")
-
-if (length(existing) > 0) {
+# NO2 and NO2_WEIGHT each keep their own incremental start, so a weight
+# backfill can catch up independently of the NO2 archive.
+incremental_start = function(prefix) {
+  existing = list.files(DATA_RAW, pattern = paste0("^", prefix, "_\\d{8}.*\\.tif$"))
+  if (length(existing) == 0) {
+    message(prefix, ": empty archive, starting from ", START_DATE)
+    return(as.Date(START_DATE))
+  }
   last_date = max(as.Date(regmatches(existing, regexpr("\\d{8}", existing)),
                           format = "%Y%m%d"))
-  # First day of the month after the newest archived month
-  download_start = seq(as.Date(format(last_date, "%Y-%m-01")),
-                       length = 2, by = "1 month")[2]
-  message("Archive holds ", length(existing), " months up to ",
+  message("Archive holds ", length(existing), " ", prefix, " months up to ",
           month_label(last_date))
-} else {
-  download_start = as.Date(START_DATE)
-  message("Empty archive, starting from ", START_DATE)
+  # First day of the month after the newest archived month
+  seq(as.Date(format(last_date, "%Y-%m-01")), length = 2, by = "1 month")[2]
 }
 
-if (download_start > as.Date(END_DATE)) {
-  message("Archive is up to date, nothing to download.")
-} else {
-  message("Requesting ", month_label(download_start), " .. ",
+for (asset in list(c("NO2", "no2_monthly"), c("NO2_WEIGHT", "no2_weight"))) {
+  download_start = incremental_start(asset[2])
+  if (download_start > as.Date(END_DATE)) {
+    message(asset[2], ": archive is up to date, nothing to download.")
+    next
+  }
+  message(asset[2], ": Requesting ", month_label(download_start), " .. ",
           month_label(END_DATE))
   download_terrascope(
     bbox        = BBOX_GLOBAL,
@@ -40,8 +44,8 @@ if (download_start > as.Date(END_DATE)) {
     end_date    = END_DATE,
     output_dir  = DATA_RAW,
     collection  = S5P_COLLECTION,
-    asset_key   = "NO2",
-    file_prefix = "no2_monthly"
+    asset_key   = asset[1],
+    file_prefix = asset[2]
   )
 }
 
