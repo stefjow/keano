@@ -16,9 +16,21 @@
 #              Excluding the freshest year keeps the baseline from chasing m
 #              downward month by month, so sustained improvement clears the
 #              margin; old records still expire after 5 years.
+#   parent_under  relative undercut of the cell's res-4 parent region (~1770
+#              km²): mean of children m, with the identical expiring-min
+#              baseline construction one level up
+#   is_record  the cell undercut its own baseline beyond CREDIT_MARGIN while
+#              eligible (a fact about the cell, independent of the payout)
 #   credit     relative undercut (baseline - m)/baseline, if the cell is
-#              eligible (m >= NO2_FLOOR) and the undercut clears CREDIT_MARGIN;
-#              0 if observed but no record; NA if m or baseline undefined
+#              eligible (m >= NO2_FLOOR) and the undercut clears CREDIT_MARGIN,
+#              weighted by the parent factor
+#                w = clamp01((parent_under + margin) / (2 * margin))
+#              NO2 is transport-driven at 36 km² scale — a cell can hit a
+#              record low because this year's winds moved the neighbour's
+#              plume, not because anyone reduced. Full credit needs the
+#              neighbourhood at/near record lows too; collective improvements
+#              pass untouched. 0 if observed but no paid record; NA if m or
+#              baseline undefined
 #
 # Output: data/metrics/shard=<h3res0>/part-0.parquet
 # ============================================================================
@@ -28,7 +40,17 @@ loadPackages(c("data.table", "arrow", "dplyr", "parallel"))
 
 ensure_dir(DATA_METRICS)
 
-cells = as.data.table(read_parquet(file.path(DATA_LOOKUP, "cells.parquet")))
+# res-4 parent from the fixed H3 v4 string layout (self-tested against h3jsr
+# in scripts/06_viz.R): res nibble = char 2, digit 4 = top 3 bits of char 7
+HEXC = strsplit("0123456789abcdef", "")[[1]]
+parent_r4 = function(h) {
+  d4 = bitwShiftR(strtoi(substr(h, 7, 7), 16L), 1L)
+  paste0("84", substr(h, 3, 6), HEXC[bitwOr(bitwShiftL(d4, 1L), 1L) + 1L],
+         "ffffffff")
+}
+
+cells = as.data.table(read_parquet(file.path(DATA_LOOKUP, "cells.parquet"),
+                                   col_select = "shard"))
 
 months_all = months_in_dataset(DATA_PANEL)
 if (length(months_all) == 0) stop("Panel is empty. Run scripts/03_build_panel.R first.")
@@ -40,13 +62,16 @@ message("Month axis: ", index_to_label(midx_full[1]), " .. ",
         " (", length(midx_full), " months)")
 
 shards = sort(unique(cells$shard))
-# Slim per-shard cell lists — all the workers need from the cells table
-shard_cells = split(cells$cell_id, cells$shard)
 
 # One shard's full history per worker (PSOCK; see script 03 on why not fork).
 # The panel dataset handle is created inside each worker.
 do_shard = function(s) {
   t0 = Sys.time()
+
+  ce = open_dataset(file.path(DATA_LOOKUP, "cells.parquet")) |>
+    filter(shard == s) |> select(cell_id, h3) |> collect() |> as.data.table()
+  ce[, p4 := parent_r4(h3)]
+  ce[, p4i := chmatch(p4, unique(p4))]
 
   pnl = open_dataset(DATA_PANEL) |>
     filter(shard == s) |>
@@ -57,7 +82,7 @@ do_shard = function(s) {
   pnl[, midx := month_index(month)][, month := NULL]
 
   # Balanced grid: all cells of the shard x all months
-  dt = CJ(cell_id = shard_cells[[s]], midx = midx_full)
+  dt = CJ(cell_id = ce$cell_id, midx = midx_full)
   dt = pnl[dt, on = c("cell_id", "midx")]
   setkey(dt, cell_id, midx)
 
@@ -87,18 +112,40 @@ do_shard = function(s) {
     m_base, pmin(seq_len(.N), baseline_len)
   ), by = cell_id]
 
+  # res-4 parent context: same series + baseline construction one level up
+  # (a res-4 cell lies entirely within one res-0 shard, so this is complete)
+  dt[ce, p4i := i.p4i, on = "cell_id"]
+  parp = dt[!is.na(m), .(m_p = mean(m)), by = .(p4i, midx)]
+  parp = parp[CJ(p4i = unique(ce$p4i), midx = midx_full),
+              on = c("p4i", "midx")]
+  setkey(parp, p4i, midx)
+  parp[, pm_base := shift(m_p, BASELINE_EXCLUDE_MONTHS), by = p4i]
+  parp[, b_p := roll_min_adaptive(
+    pm_base, pmin(seq_len(.N), baseline_len)
+  ), by = p4i]
+  parp[, parent_under := (b_p - m_p) / b_p]
+  dt[parp, parent_under := i.parent_under, on = c("p4i", "midx")]
+
   dt[, undercut := (baseline - m) / baseline]
   dt[, eligible := has_m & m >= NO2_FLOOR]
+  dt[, is_record := !is.na(m) & !is.na(baseline) & eligible &
+                    undercut > CREDIT_MARGIN]
+  # The parent series contains the cell, so parent_under is defined whenever
+  # the cell baseline is — the NA fallback to full weight is belt and braces.
+  dt[, w_parent := fifelse(
+    is.na(parent_under), 1,
+    pmin(pmax((parent_under + CREDIT_MARGIN) / (2 * CREDIT_MARGIN), 0), 1)
+  )]
   dt[, credit := fifelse(
     is.na(m) | is.na(baseline), NA_real_,
-    fifelse(eligible & undercut > CREDIT_MARGIN, undercut, 0)
+    fifelse(is_record, undercut * w_parent, 0)
   )]
-  dt[, is_record := !is.na(credit) & credit > 0]
 
   # Drop the empty lead-in before a cell's first observation
   out = dt[obs | has_m, .(
     cell_id, month = index_to_label(midx), no2, n_pix,
-    m, perf_short, perf_long, baseline, credit, eligible, is_record
+    m, perf_short, perf_long, baseline, parent_under,
+    credit, eligible, is_record
   )]
 
   shard_dir = ensure_dir(file.path(DATA_METRICS, paste0("shard=", s)))
@@ -112,8 +159,9 @@ do_shard = function(s) {
 }
 
 cl = makeCluster(max(1L, min(N_WORKERS, length(shards))), outfile = "")
-clusterExport(cl, c("do_shard", "shard_cells", "midx_full", "DATA_PANEL",
-                    "DATA_METRICS", "WINDOW_MONTHS", "MIN_MONTHS_IN_WINDOW",
+clusterExport(cl, c("do_shard", "parent_r4", "HEXC", "midx_full",
+                    "DATA_PANEL", "DATA_METRICS", "DATA_LOOKUP",
+                    "WINDOW_MONTHS", "MIN_MONTHS_IN_WINDOW",
                     "BASELINE_WINDOW_MONTHS", "BASELINE_EXCLUDE_MONTHS",
                     "CREDIT_MARGIN", "NO2_FLOOR",
                     "month_index", "index_to_label", "roll_min_adaptive",

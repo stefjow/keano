@@ -24,7 +24,7 @@ shards = sort(unique(cells$shard))
 scan_shard = function(s) {
   mt = open_dataset(DATA_METRICS) |>
     filter(shard == s) |>
-    select(cell_id, month, no2, m, perf_short, baseline,
+    select(cell_id, month, no2, m, perf_short, baseline, parent_under,
            credit, eligible, is_record) |>
     collect() |>
     as.data.table()
@@ -39,7 +39,8 @@ scan_shard = function(s) {
       sum_perf_short = sum(perf_short[eligible & !is.na(perf_short)]),
       n_perf_short   = sum(eligible & !is.na(perf_short))
     ), by = month],
-    rec = mt[is_record == TRUE, .(cell_id, month, no2, m, baseline, credit)]
+    rec = mt[is_record == TRUE,
+             .(cell_id, month, no2, m, baseline, parent_under, credit)]
   )
 }
 
