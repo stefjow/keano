@@ -54,6 +54,12 @@ child_id = function(p, res, k) {
                  "ffffff"))
 }
 
+# res-1 parent of a res-3 id (digits 2-3 -> 7, res nibble -> 1); groups the
+# res-6 planes into the web bundle's spatial chunks
+r1_of_r3 = function(h) paste0("81", substr(h, 3, 4),
+  HEXC[bitwOr(bitwAnd(strtoi(substr(h, 5, 5), 16L), 12L), 3L) + 1L],
+  "ffffffffff")
+
 smp = open_dataset(file.path(DATA_LOOKUP, "cells.parquet")) |>
   head(200000) |> select(h3) |> collect()
 smp = sample(smp$h3, 1000)
@@ -61,7 +67,8 @@ pth = path_r6(smp)
 stopifnot(identical(parent_r3(smp), get_parent(smp, 3)),
           identical(child_id(parent_r3(smp), 6, pth), smp),
           identical(child_id(parent_r3(smp), 5, pth %/% 8L), get_parent(smp, 5)),
-          identical(child_id(parent_r3(smp), 4, pth %/% 64L), get_parent(smp, 4)))
+          identical(child_id(parent_r3(smp), 4, pth %/% 64L), get_parent(smp, 4)),
+          identical(r1_of_r3(parent_r3(smp)), get_parent(smp, 1)))
 rm(smp, pth)
 
 shards = sort(sub("^shard=", "",
@@ -257,18 +264,21 @@ tier_sec = function(r, tt, key, B, crmax) {
 tier_sec(4, t4, t4$p4, 1L, cr4_max)
 tier_sec(5, t5, t5$p5, 8L, cr5_max)
 # res 6: raw per-cell values; credit is the cell's own relative undercut,
-# defined (>= 0) for eligible cells and NA (transparent) otherwise
+# defined (>= 0) for eligible cells and NA (transparent) otherwise.
+# Levels kept un-delta'd too: the web bundle re-deltas them per chunk.
+lev6 = list(
+  tm = lev_u8(t_m(fine$m)),
+  ty = lev_u8(t_sym(fine$perf_short, sym_y)),
+  tt = lev_u8(t_sym(fine$perf_long, sym_t)),
+  tc = lev_u8(fifelse(fine$elig,
+                      t_cr(fifelse(is.na(fine$credit), 0, fine$credit),
+                           cr6_max),
+                      NA_real_))
+)
 add_sec("bm6", bitmap_raw(fine$r3i, fine$path, 64L))
-add_sec("tm6", delta_u8(lev_u8(t_m(fine$m))))
-add_sec("ty6", delta_u8(lev_u8(t_sym(fine$perf_short, sym_y))))
-add_sec("tt6", delta_u8(lev_u8(t_sym(fine$perf_long, sym_t))))
-add_sec("tc6", delta_u8(lev_u8(fifelse(fine$elig,
-                                       t_cr(fifelse(is.na(fine$credit), 0,
-                                                    fine$credit), cr6_max),
-                                       NA_real_))))
+for (nm in names(lev6)) add_sec(paste0(nm, 6), delta_u8(lev6[[nm]]))
 
 bin = do.call(c, unname(sections))
-rm(sections)
 comp = memCompress(bin, type = "gzip")   # zlib stream; browser sniffs format
 b64 = gsub("\n", "", base64_enc(comp), fixed = TRUE)
 message("Container: ", round(length(bin) / 2^20, 1), " MB raw -> ",
@@ -293,22 +303,90 @@ meta = list(
                 credit5 = list(max = cr5_max), credit6 = list(max = cr6_max)),
   nP = nP,
   n = list(`4` = nrow(t4), `5` = nrow(t5), `6` = nrow(fine)),
-  bin_len = length(bin),
-  manifest = manifest,
   series_global = series_global,
   stats = stats
 )
-meta_json = toJSON(meta, auto_unbox = TRUE, digits = NA)
 
 # Splice instead of sub(): the replacement strings are huge and sub() would
 # interpret backslashes/backreferences in them.
 html = paste(readLines("viz/template.html", encoding = "UTF-8"), collapse = "\n")
-a = strsplit(html, "__KEANO_META__", fixed = TRUE)[[1]]
-stopifnot(length(a) == 2)
-b = strsplit(a[2], "__KEANO_BIN__", fixed = TRUE)[[1]]
-stopifnot(length(b) == 2)
-out_file = file.path(DATA_VIZ, "index.html")
-writeLines(paste0(a[1], meta_json, b[1], b64, b[2]), out_file, useBytes = TRUE)
+splice = function(meta_list, bin_b64, out_file) {
+  a = strsplit(html, "__KEANO_META__", fixed = TRUE)[[1]]
+  stopifnot(length(a) == 2)
+  b = strsplit(a[2], "__KEANO_BIN__", fixed = TRUE)[[1]]
+  stopifnot(length(b) == 2)
+  json = toJSON(meta_list, auto_unbox = TRUE, digits = NA)
+  writeLines(paste0(a[1], json, b[1], bin_b64, b[2]), out_file, useBytes = TRUE)
+}
 
-message("Map written to ", out_file, " (",
+# --- Single-file build (network share: no HTTP, everything embedded) -----------
+meta_single = meta
+meta_single$bin_len = length(bin)
+meta_single$manifest = manifest
+out_file = file.path(DATA_VIZ, "index.html")
+splice(meta_single, b64, out_file)
+message("Single-file map: ", out_file, " (",
         round(file.size(out_file) / 2^20, 1), " MB)")
+
+# --- Web bundle (public hosting: shell + binaries fetched on demand) ----------
+# data/<month>/ is immutable — serve with long-lived cache headers, and
+# index.html with no-cache; every .bin gets a precompressed .gz sibling for
+# nginx gzip_static.
+WEB_DIR = file.path(DATA_VIZ, "web")
+wdata = ensure_dir(file.path(WEB_DIR, "data", latest))
+write_bin_gz = function(r, path) {
+  writeBin(r, path)
+  con = gzfile(paste0(path, ".gz"), "wb", compression = 9L)
+  writeBin(r, con); close(con)
+  invisible(length(r))
+}
+concat_file = function(names) {
+  man = list(); off = 0
+  for (nm in names) {
+    man[[length(man) + 1L]] = list(nm, off, length(sections[[nm]]))
+    off = off + length(sections[[nm]])
+  }
+  list(bin = do.call(c, unname(sections[names])), manifest = man)
+}
+core = concat_file(c("r3ids", "tm3", "ty3", "tt3", "tc3", "cr3f", "nc3"))
+t4f  = concat_file(c("bm4", "tm4", "ty4", "tt4", "tc4"))
+t5f  = concat_file(c("bm5", "tm5", "ty5", "tt5", "tc5"))
+write_bin_gz(core$bin, file.path(wdata, "core.bin"))
+write_bin_gz(sections$r3series, file.path(wdata, "series.bin"))
+write_bin_gz(t4f$bin, file.path(wdata, "t4.bin"))
+write_bin_gz(t5f$bin, file.path(wdata, "t5.bin"))
+
+# res-6 planes chunked by res-1 parent. Sorted res-3 ids are contiguous
+# within a res-1 parent (lexicographic = prefix order), so every chunk is an
+# index range: [first, first + nR3) parents, their cells re-delta'd locally.
+r1 = r1_of_r3(r3_ids)
+rl = rle(r1)
+stopifnot(!anyDuplicated(rl$values))
+first = cumsum(c(1L, head(rl$lengths, -1L)))
+off6 = c(0L, cumsum(tabulate(fine$r3i, nbins = nP)))
+chunks_meta = vector("list", length(rl$lengths))
+for (k in seq_along(rl$lengths)) {
+  a = first[k]; nr = rl$lengths[k]
+  cells = if (off6[a + nr] > off6[a]) (off6[a] + 1L):off6[a + nr] else integer(0)
+  raw_k = c(sections$bm6[((a - 1L) * 64L + 1L):((a + nr - 1L) * 64L)],
+            unlist(lapply(lev6, function(v) delta_u8(v[cells])),
+                   use.names = FALSE))
+  write_bin_gz(as.raw(raw_k), file.path(wdata, sprintf("r6-%04d.bin", k - 1L)))
+  chunks_meta[[k]] = c(a - 1L, nr, length(cells))
+}
+meta_web = meta
+meta_web$web = list(
+  base = paste0("data/", latest),
+  files = list(core = list(name = "core.bin", manifest = core$manifest),
+               series = list(name = "series.bin"),
+               t4 = list(name = "t4.bin", manifest = t4f$manifest),
+               t5 = list(name = "t5.bin", manifest = t5f$manifest)),
+  r6 = chunks_meta
+)
+splice(meta_web, "", file.path(WEB_DIR, "index.html"))
+web_files = list.files(wdata, full.names = TRUE)
+message("Web bundle: ", WEB_DIR, " (", length(web_files) + 1L, " files; ",
+        round(sum(file.size(web_files[!grepl("\\.gz$", web_files)])) / 2^20, 1),
+        " MB raw, ",
+        round(sum(file.size(web_files[grepl("\\.gz$", web_files)])) / 2^20, 1),
+        " MB gzipped)")

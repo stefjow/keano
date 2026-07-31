@@ -224,7 +224,7 @@
 
 <main>
   <div id="map"></div>
-  <div id="loading">inflating hexagon data …</div>
+  <div id="loading">loading hexagon data …</div>
 
   <div id="region-panel" hidden>
     <div class="rp-head"><b id="rp-title"></b><span id="rp-sub"></span></div>
@@ -286,9 +286,15 @@ const NP = META.nP;
 const Z4 = 5.0, Z5 = 6.2, Z6 = 7.4;
 const FEAT_CAP = 60000;   // uniform-stride thinning beyond this, never truncation
 
-/* --- Binary container ------------------------------------------------------ */
-/* One zlib/gzip-compressed blob: per-tier occupancy bitmaps + delta-encoded
-   quantized metric planes (u8, res-3 series u16). 0 = NA. */
+/* --- Data layer ------------------------------------------------------------- */
+/* Two builds from one template:
+   - single-file (network share): one zlib blob base64-embedded (#keano-bin),
+     inflated via DecompressionStream; everything resident.
+   - web (META.web set): small binaries fetched on demand — core (res-3) up
+     front; series, t4, t5 lazily; res-6 planes chunked by res-1 parent.
+   Either way: occupancy bitmaps + delta-encoded quantized planes, 0 = NA. */
+const WEB = META.web || null;
+
 function b64bytes(b64) {
   const bin = atob(b64), a = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
@@ -307,76 +313,86 @@ async function inflateContainer() {
     throw new Error("payload length mismatch: " + bin.length + " vs " + META.bin_len);
   return bin;
 }
+async function fetchBytes(name) {
+  const resp = await fetch(WEB.base + "/" + name);
+  if (!resp.ok) throw new Error(name + " → HTTP " + resp.status);
+  return new Uint8Array(await resp.arrayBuffer());
+}
 
-const SEC = {};
-META.manifest.forEach(([name, off, len]) => { SEC[name] = [off, len]; });
-const secBytes = (bin, name) => {
-  const [off, len] = SEC[name];
-  return bin.subarray(off, off + len);
-};
 function undelta8(a) {
   let acc = 0;
   for (let i = 0; i < a.length; i++) { acc = (acc + a[i]) & 255; a[i] = acc; }
   return a;
 }
-function secU8(bin, name) { return undelta8(secBytes(bin, name)); }
-function secU16(bin, name) {
-  const [off, len] = SEC[name];
-  const a = new Uint16Array(bin.slice(off, off + len).buffer);  // aligned copy
+function undelta16(a) {
   let acc = 0;
   for (let i = 0; i < a.length; i++) { acc = (acc + a[i]) & 65535; a[i] = acc; }
   return a;
 }
+function mkSections(bytes, manifest) {
+  const at = {};
+  manifest.forEach(([name, off, len]) => { at[name] = [off, len]; });
+  const raw = name => { const [o, l] = at[name]; return bytes.subarray(o, o + l); };
+  const cut = name => { const [o, l] = at[name]; return bytes.slice(o, o + l).buffer; };
+  return {
+    raw,
+    u8: name => undelta8(raw(name)),
+    u16: name => undelta16(new Uint16Array(cut(name))),
+    u16raw: name => new Uint16Array(cut(name)),
+    f32: name => new Float32Array(cut(name))
+  };
+}
 const lev2t8 = lev => lev === 0 ? -1 : (lev - 1) / 254;     // -1 = no data
 const lev2t16 = lev => lev === 0 ? -1 : (lev - 1) / 65533;
 
-/* Decoded globals, filled by setupData() */
-let R3 = null;          // { ids, tm, ty, tt, tc, series }
-const TIERS = {};       // res -> { B, bm, off, tm, ty, tt, tc }
+/* Decoded globals */
+let R3 = null;     // { ids, tm, ty, tt, tc, series|null, credit, ncr }
+const TIERS = {};  // res -> { B, chunks: [chunk]|null, file? (lazy), pending? }
 const r3Index = new Map();
 let r3Lat = null, r3Lng = null;
 const idAt3 = j => R3.ids.substr(j * 15, 15);
+const POP = new Uint8Array(256);
+for (let i = 1; i < 256; i++) POP[i] = POP[i >> 1] + (i & 1);
 
-function buildTier(bin, r, B) {
-  const bm = secBytes(bin, "bm" + r);
-  const POP = new Uint8Array(256);
-  for (let i = 1; i < 256; i++) POP[i] = POP[i >> 1] + (i & 1);
-  const off = new Uint32Array(NP + 1);
+/* A chunk holds bitmap + planes for parents [first, first+nR3); cellStart is
+   the tier-global index of its first cell (stable feature ids). */
+function fillChunk(T, c, bm, planes) {
+  c.bm = bm;
+  Object.assign(c, planes);
+  const off = new Uint32Array(c.nR3 + 1);
   let acc = 0;
-  for (let j = 0; j < NP; j++) {
-    off[j] = acc;
-    for (let b = 0; b < B; b++) acc += POP[bm[j * B + b]];
+  for (let i = 0; i < c.nR3; i++) {
+    off[i] = acc;
+    const b0 = i * T.B;
+    for (let b = 0; b < T.B; b++) acc += POP[bm[b0 + b]];
   }
-  off[NP] = acc;
-  if (acc !== META.n[r]) throw new Error("tier " + r + " bitmap/plane mismatch");
-  return {
-    B, bm, off,
-    tm: secU8(bin, "tm" + r), ty: secU8(bin, "ty" + r),
-    tt: secU8(bin, "tt" + r), tc: secU8(bin, "tc" + r)
-  };
+  off[c.nR3] = acc;
+  if (acc !== c.nCells) throw new Error("chunk bitmap/plane mismatch");
+  c.off = off;
+  c.loaded = true;
+}
+function chunkFor(T, j) {
+  const ch = T.chunks;
+  let lo = 0, hi = ch.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1, c = ch[mid];
+    if (j < c.first) hi = mid - 1;
+    else if (j >= c.first + c.nR3) lo = mid + 1;
+    else return c;
+  }
+  return null;
+}
+function wholeTierChunk(T, r, sec) {
+  const c = { first: 0, nR3: NP, cellStart: 0, nCells: META.n[r], loaded: false };
+  fillChunk(T, c, sec.raw("bm" + r),
+            { tm: sec.u8("tm" + r), ty: sec.u8("ty" + r),
+              tt: sec.u8("tt" + r), tc: sec.u8("tc" + r) });
+  return c;
 }
 
-function secF32(bin, name) {
-  const [off, len] = SEC[name];
-  return new Float32Array(bin.slice(off, off + len).buffer);  // aligned copy
-}
-function secU16raw(bin, name) {
-  const [off, len] = SEC[name];
-  return new Uint16Array(bin.slice(off, off + len).buffer);
-}
-
-function setupData(bin) {
-  R3 = {
-    ids: new TextDecoder("ascii").decode(secBytes(bin, "r3ids")),
-    tm: secU8(bin, "tm3"), ty: secU8(bin, "ty3"),
-    tt: secU8(bin, "tt3"), tc: secU8(bin, "tc3"),
-    series: secU16(bin, "r3series"),
-    credit: secF32(bin, "cr3f"),      // exact regional credit sums
-    ncr: secU16raw(bin, "nc3")        // credited cells per region
-  };
-  TIERS[4] = buildTier(bin, 4, 1);
-  TIERS[5] = buildTier(bin, 5, 8);
-  TIERS[6] = buildTier(bin, 6, 64);
+function finishR3(sec) {
+  R3.credit = sec.f32("cr3f");      // exact regional credit sums
+  R3.ncr = sec.u16raw("nc3");       // credited cells per region
   r3Lat = new Float64Array(NP);
   r3Lng = new Float64Array(NP);
   for (let j = 0; j < NP; j++) {
@@ -385,6 +401,87 @@ function setupData(bin) {
     const [la, lo] = h3.cellToLatLng(id);
     r3Lat[j] = la; r3Lng[j] = lo;
   }
+}
+function setupSingle(bin) {
+  const sec = mkSections(bin, META.manifest);
+  R3 = {
+    ids: new TextDecoder("ascii").decode(sec.raw("r3ids")),
+    tm: sec.u8("tm3"), ty: sec.u8("ty3"), tt: sec.u8("tt3"), tc: sec.u8("tc3"),
+    series: sec.u16("r3series")
+  };
+  finishR3(sec);
+  for (const [r, B] of [[4, 1], [5, 8], [6, 64]]) {
+    const T = TIERS[r] = { B, chunks: null };
+    T.chunks = [wholeTierChunk(T, r, sec)];
+  }
+}
+async function setupWebCore() {
+  const sec = mkSections(await fetchBytes(WEB.files.core.name),
+                         WEB.files.core.manifest);
+  R3 = {
+    ids: new TextDecoder("ascii").decode(sec.raw("r3ids")),
+    tm: sec.u8("tm3"), ty: sec.u8("ty3"), tt: sec.u8("tt3"), tc: sec.u8("tc3"),
+    series: null
+  };
+  finishR3(sec);
+  TIERS[4] = { B: 1, chunks: null, file: WEB.files.t4 };
+  TIERS[5] = { B: 8, chunks: null, file: WEB.files.t5 };
+  const chunks = WEB.r6.map(([first, nR3, nCells], i) => ({
+    first, nR3, nCells, cellStart: 0, loaded: false, loading: false,
+    name: "r6-" + String(i).padStart(4, "0") + ".bin"
+  }));
+  let cs = 0;
+  for (const c of chunks) { c.cellStart = cs; cs += c.nCells; }
+  TIERS[6] = { B: 64, chunks };
+}
+
+/* lazy loading: whole-tier files (t4/t5, web mode) and res-6 chunks */
+function tierReady(r) {
+  const T = TIERS[r];
+  if (T.chunks) return true;
+  if (!T.pending) {
+    T.pending = fetchBytes(T.file.name).then(bytes => {
+      const sec = mkSections(bytes, T.file.manifest);
+      T.chunks = [wholeTierChunk(T, r, sec)];
+      scheduleFineRefresh();
+    }).catch(err => { T.pending = null; console.error(err); });
+  }
+  return false;
+}
+function requestChunks(T, list) {
+  for (const c of list) {
+    if (c.loaded || c.loading) continue;
+    c.loading = true;
+    fetchBytes(c.name).then(bytes => {
+      const bm = bytes.subarray(0, c.nR3 * T.B);
+      const planes = {};
+      let o = c.nR3 * T.B;
+      for (const nm of ["tm", "ty", "tt", "tc"]) {
+        planes[nm] = undelta8(bytes.subarray(o, o + c.nCells));
+        o += c.nCells;
+      }
+      fillChunk(T, c, bm, planes);
+      scheduleFineRefresh();
+    }).catch(err => { c.loading = false; console.error(err); });
+  }
+}
+let refreshTimer = null;
+function scheduleFineRefresh() {
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    updateFine();
+    updateTopRegions();
+  }, 150);
+}
+
+/* res-3 monthly series: lazy in web mode (only the hover chart needs it) */
+let pendingChart = null;
+function loadSeries() {
+  fetchBytes(WEB.files.series.name).then(bytes => {
+    R3.series = undelta16(new Uint16Array(bytes.buffer));
+    if (pendingChart) drawRegionChart(pendingChart.r3i, pendingChart.cellNow);
+  }).catch(console.error);
 }
 
 /* --- H3 id reconstruction (mirrors child_id() in 06_viz.R, self-tested there
@@ -524,11 +621,10 @@ function displayRes() {
   return z < Z4 ? 3 : z < Z5 ? 4 : z < Z6 ? 5 : 6;
 }
 
+const dataReady = WEB ? setupWebCore()
+                      : inflateContainer().then(setupSingle);
 Promise.all([
-  inflateContainer().then(bin => {
-    setupData(bin);
-    loading.textContent = "building hexagons …";
-  }),
+  dataReady.then(() => { loading.textContent = "building hexagons …"; }),
   new Promise(resolve => map.on("load", resolve))
 ]).then(setupMap)
   .catch(err => { loading.textContent = "failed to load: " + err.message; throw err; });
@@ -564,6 +660,7 @@ function setupMap() {
   updateFine();
   updateTopRegions();
   loading.remove();
+  if (WEB) { loadSeries(); tierReady(4); }   // small, wanted soon — prefetch
 }
 
 /* --- Fine-tier viewport source ------------------------------------------------ */
@@ -583,6 +680,7 @@ function updateFine() {
     return;
   }
   const T = TIERS[r];
+  if (!T.chunks && !tierReady(r)) return;   // t4/t5 fetching; refresh queued
   const b = map.getBounds();
   let w = b.getWest(), e = b.getEast();
   const s = b.getSouth(), n = b.getNorth();
@@ -590,7 +688,8 @@ function updateFine() {
 
   /* padding: res-3 circumradius (~0.65°) + child overhang, in degrees */
   const PAD = 1.0;
-  const visible = [];
+  const visible = [];   // [parentIdx, chunk]
+  const need = [];
   let total = 0;
   for (let j = 0; j < NP; j++) {
     const la = r3Lat[j];
@@ -600,33 +699,38 @@ function updateFine() {
     if (!(lo >= w - padLng && lo <= e + padLng) &&
         !(lo + 360 >= w - padLng && lo + 360 <= e + padLng) &&
         !(lo - 360 >= w - padLng && lo - 360 <= e + padLng)) continue;
-    const count = T.off[j + 1] - T.off[j];
-    if (count > 0) { visible.push(j); total += count; }
+    const c = chunkFor(T, j);
+    if (!c) continue;
+    if (!c.loaded) { need.push(c); continue; }
+    const jl = j - c.first;
+    const count = c.off[jl + 1] - c.off[jl];
+    if (count > 0) { visible.push([j, c]); total += count; }
   }
+  if (need.length) requestChunks(T, need);   // renders again when they land
 
   const stride = Math.max(1, Math.ceil(total / FEAT_CAP));
   const feats = [];
-  for (const j of visible) {
-    const parent = idAt3(j), base = j * T.B;
-    let idx = T.off[j];
+  for (const [j, c] of visible) {
+    const parent = idAt3(j), jl = j - c.first, base = jl * T.B;
+    let li = c.off[jl];
     for (let by = 0; by < T.B; by++) {
-      const v = T.bm[base + by];
+      const v = c.bm[base + by];
       if (v === 0) continue;
       for (let bit = 0; bit < 8; bit++) {
         if (!(v >> bit & 1)) continue;
-        if (idx % stride === 0) {
+        if (li % stride === 0) {
           const id = childId(parent, r, by * 8 + bit);
           feats.push({
-            type: "Feature", id: idx,
+            type: "Feature", id: c.cellStart + li,
             properties: {
               id,
-              tm: lev2t8(T.tm[idx]), ty: lev2t8(T.ty[idx]),
-              tt: lev2t8(T.tt[idx]), tc: lev2t8(T.tc[idx])
+              tm: lev2t8(c.tm[li]), ty: lev2t8(c.ty[li]),
+              tt: lev2t8(c.tt[li]), tc: lev2t8(c.tc[li])
             },
             geometry: { type: "Polygon", coordinates: [hexRing(id)] }
           });
         }
-        idx++;
+        li++;
       }
     }
   }
@@ -716,6 +820,14 @@ function drawRegionChart(r3i, cellNow) {
   const c = cv.getContext("2d");
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (r3i === undefined) return;
+  if (!R3.series) {   // web mode: series still on its way
+    pendingChart = { r3i, cellNow };
+    c.font = "9.5px " + getComputedStyle(document.body).getPropertyValue("--mono");
+    c.fillStyle = "#6e8489";
+    c.fillText("history loading …", 8, 46);
+    return;
+  }
+  pendingChart = null;
 
   const vals = new Array(NM);
   let lo = Infinity, hi = -Infinity, any = false;
@@ -919,6 +1031,7 @@ function updateTopRegions() {
 
   if (displayRes() === 6) {
     /* --- individual cells in view (res-6 tier active) --------------------- */
+    /* loaded chunks only — updateFine is already fetching the missing ones */
     const T = TIERS[6], PAD = 1.0;
     const cand = [];   // [credit, lat, lng]
     for (let j = 0; j < NP; j++) {
@@ -926,19 +1039,21 @@ function updateTopRegions() {
       if (la3 < s - PAD || la3 > n + PAD) continue;
       const padLng = Math.min(8, PAD / Math.max(0.15, Math.cos(la3 * Math.PI / 180)));
       if (!inLng(r3Lng[j], w - padLng, e + padLng)) continue;
-      const parent = idAt3(j), base = j * T.B;
-      let idx = T.off[j];
+      const c = chunkFor(T, j);
+      if (!c || !c.loaded) continue;
+      const parent = idAt3(j), jl = j - c.first, base = jl * T.B;
+      let li = c.off[jl];
       for (let by = 0; by < T.B; by++) {
-        const v = T.bm[base + by];
+        const v = c.bm[base + by];
         if (v === 0) continue;
         for (let bit = 0; bit < 8; bit++) {
           if (!(v >> bit & 1)) continue;
-          if (T.tc[idx] > 1) {   // level 1 = credit 0; >1 = paid credit
+          if (c.tc[li] > 1) {   // level 1 = credit 0; >1 = paid credit
             const [la, lo] = h3.cellToLatLng(childId(parent, 6, by * 8 + bit));
             if (la >= s && la <= n && inLng(lo, w, e))
-              cand.push([dec.credit6(lev2t8(T.tc[idx])), la, lo]);
+              cand.push([dec.credit6(lev2t8(c.tc[li])), la, lo]);
           }
-          idx++;
+          li++;
         }
       }
     }

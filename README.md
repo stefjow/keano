@@ -74,16 +74,25 @@ All in `config/config.R`: `H3_RESOLUTION`, `WINDOW_MONTHS`,
 `N_WORKERS` (scripts 02–05 parallelize over chunks/months/shards).
 Rankings and composites are **derived views** — they can be redefined at any
 time without touching the stored panel or metric history. So is the map:
-script 06 writes a single `data/viz/index.html` (MapLibre + h3-js, dark
-basemap) with res-3 hexagons globally — each carrying its full monthly `m`
-series, shown as a mouse-over trend panel — and full-coverage res-4/5/6
-tiers as you zoom in (~0.3M / 1.8M / 12.4M cells), with layers for NO₂
-level, YoY, long-term trend, and credit. No per-cell ids, coordinates or
-geometry are shipped: each tier is a per-res-3-parent occupancy bitmap plus
-delta-encoded quantized metric planes in one zlib-compressed embedded
-container, and the browser reconstructs H3 ids and hexagon outlines for the
-current viewport only. Self-contained (no server); only the map libraries
-and basemap tiles come from the web.
+script 06 renders it (MapLibre + h3-js, dark basemap) with res-3 hexagons
+globally — each carrying its full monthly `m` series, shown as a mouse-over
+trend panel — and full-coverage res-4/5/6 tiers as you zoom in (~0.3M /
+1.8M / 12.4M cells), with layers for NO₂ level, YoY, long-term trend, and
+credit. No per-cell ids, coordinates or geometry are shipped: each tier is
+a per-res-3-parent occupancy bitmap plus delta-encoded quantized metric
+planes, and the browser reconstructs H3 ids and hexagon outlines for the
+current viewport only. One template, two builds:
+
+* **`data/viz/index.html`** — single file, everything zlib-compressed and
+  base64-embedded (~47 MB). For the network share, where no HTTP server
+  exists; open it straight from the filesystem.
+* **`data/viz/web/`** — for public hosting: a small app shell plus binary
+  files fetched on demand (res-3 core ~1.4 MB up front; monthly series,
+  res-4/5 tiers lazily; res-6 planes chunked by res-1 parent, ~50 KB per
+  chunk, viewport-driven). Every `.bin` has a precompressed `.gz` sibling
+  for `gzip_static`; `data/<month>/` paths are immutable, so far-future
+  cache headers apply. Deploy with `scripts/08_deploy.sh user@host:/path`
+  (nginx snippet inside).
 
 ## Planned: daily nowcast layer
 
