@@ -885,14 +885,19 @@ function updateTopRegions() {
   const s = b.getSouth(), n = b.getNorth();
   const global = e - w >= 360 && s <= -60 && n >= 75;
   const idxs = [];
+  /* pad by a res-3 circumradius so regions intersecting the view count,
+     not only those whose center is on screen */
+  const PAD = 0.8;
   for (let j = 0; j < NP; j++) {
     if (R3.credit[j] <= 0) continue;
     if (!global) {
       const la = r3Lat[j];
-      if (la < s || la > n) continue;
+      if (la < s - PAD || la > n + PAD) continue;
+      const padLng = Math.min(8, PAD / Math.max(0.15, Math.cos(la * Math.PI / 180)));
       const lo = r3Lng[j];
-      if (!(lo >= w && lo <= e) && !(lo + 360 >= w && lo + 360 <= e) &&
-          !(lo - 360 >= w && lo - 360 <= e)) continue;
+      if (!(lo >= w - padLng && lo <= e + padLng) &&
+          !(lo + 360 >= w - padLng && lo + 360 <= e + padLng) &&
+          !(lo - 360 >= w - padLng && lo - 360 <= e + padLng)) continue;
     }
     idxs.push(j);
   }
