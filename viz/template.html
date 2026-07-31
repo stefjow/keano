@@ -435,6 +435,28 @@ function fillExpr(key) {
   return ["case", ["<", ["get", layerDef(key).prop], 0], "rgba(0,0,0,0)", e];
 }
 
+/* YoY/trend are *relative* changes: over low-NO2 water a tiny retrieval
+   wobble is a huge percentage swing. Weight the display by the cell's NO2
+   level (value-by-alpha): full strength above the eligibility floor,
+   whispering over clean ocean. Values on hover stay untouched. */
+const tOfM = m => (Math.log10(m) - S.m.lmin) / (S.m.lmax - S.m.lmin);
+function opacityExpr(key, base) {
+  const hover = ["boolean", ["feature-state", "hover"], false];
+  if (key !== "yoy" && key !== "trend")
+    return ["case", hover, 1, base];
+  const faded = ["interpolate", ["linear"], ["get", "tm"],
+                 tOfM(2), 0.06, tOfM(10), 0.25, tOfM(30), 0.55, tOfM(80), base];
+  return ["case", hover, 1, faded];
+}
+const BASE_OPACITY = { "r3-fill": 0.72, "fine-fill": 0.8 };
+function applyLayerPaint(key) {
+  for (const id of ["r3-fill", "fine-fill"]) {
+    if (!map.getLayer(id)) continue;
+    map.setPaintProperty(id, "fill-color", fillExpr(key));
+    map.setPaintProperty(id, "fill-opacity", opacityExpr(key, BASE_OPACITY[id]));
+  }
+}
+
 /* --- Hexagon geometry (client-side from H3 ids) ----------------------------- */
 function hexRing(id) {
   const ring = h3.cellToBoundary(id, true);   // closed [lng, lat] loop
@@ -506,13 +528,10 @@ function setupMap() {
   map.addSource("r3", { type: "geojson", data: buildR3() });
   map.addSource("fine", { type: "geojson", data: EMPTY });
 
-  const hoverOpacity = base =>
-    ["case", ["boolean", ["feature-state", "hover"], false], 1, base];
-
   map.addLayer({
     id: "r3-fill", type: "fill", source: "r3", maxzoom: Z4 + 0.4,
     paint: { "fill-color": fillExpr(activeLayer),
-             "fill-opacity": hoverOpacity(0.72) }
+             "fill-opacity": opacityExpr(activeLayer, BASE_OPACITY["r3-fill"]) }
   });
   map.addLayer({
     id: "r3-line", type: "line", source: "r3",
@@ -522,7 +541,7 @@ function setupMap() {
   map.addLayer({
     id: "fine-fill", type: "fill", source: "fine", minzoom: Z4,
     paint: { "fill-color": fillExpr(activeLayer),
-             "fill-opacity": hoverOpacity(0.8) }
+             "fill-opacity": opacityExpr(activeLayer, BASE_OPACITY["fine-fill"]) }
   });
   map.addLayer({
     id: "fine-line", type: "line", source: "fine", minzoom: 7.5,
@@ -753,9 +772,7 @@ LAYERS.forEach(l => {
     activeLayer = l.key;
     layerBtns.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", "false"));
     b.setAttribute("aria-pressed", "true");
-    for (const id of ["r3-fill", "fine-fill"]) {
-      if (map.getLayer(id)) map.setPaintProperty(id, "fill-color", fillExpr(l.key));
-    }
+    applyLayerPaint(l.key);
     drawLegend();
   });
   layerBtns.appendChild(b);
