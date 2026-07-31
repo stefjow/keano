@@ -175,8 +175,10 @@ sym_y = signif(as.numeric(quantile(abs(c(r3last$y3, fine[elig == TRUE, perf_shor
                                    0.98, na.rm = TRUE)), 2)
 sym_t = signif(as.numeric(quantile(abs(c(r3last$t3, fine[elig == TRUE, perf_long])),
                                    0.98, na.rm = TRUE)), 2)
+# true max, not a quantile: the sqrt scale keeps low-end resolution anyway,
+# and clamping would truncate exactly the cells the top list showcases
 cr_max = function(v) {
-  hi = as.numeric(quantile(v[v > 0], 0.999, na.rm = TRUE))
+  hi = suppressWarnings(max(v[v > 0], na.rm = TRUE))
   if (!is.finite(hi) || hi <= 0) 1 else hi
 }
 cr3_max = cr_max(r3last$credit)

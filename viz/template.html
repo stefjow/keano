@@ -250,9 +250,7 @@
       <div class="top-block">
         <h3 id="top-title">Top regions</h3>
         <table id="top-table"></table>
-        <p class="note">Σ = paid credit summed over the cells of a
-        ~12,400 km² region this month, with the number of credited cells.
-        Follows the map view. Click → to fly to the region.</p>
+        <p class="note" id="top-note"></p>
       </div>
     </div>
   </aside>
@@ -879,66 +877,113 @@ function monthName(m) {
              "August","September","October","November","December"];
   return n[+m.slice(5) - 1] + " " + m.slice(0, 4);
 }
+function topRow(i, cells, lat, lng, zoom) {
+  const tr = document.createElement("tr");
+  const tds = cells.map(([cls, txt]) => {
+    const td = document.createElement("td");
+    if (cls) td.className = cls;
+    td.textContent = txt;
+    return td;
+  });
+  const loc = document.createElement("button");
+  loc.className = "loc"; loc.textContent = "→";
+  loc.setAttribute("aria-label", "Fly to entry " + (i + 1));
+  loc.addEventListener("click", () => {
+    flyMarker.setLngLat([lng, lat]).addTo(map);
+    map.flyTo({ center: [lng, lat], zoom });
+  });
+  const tdLoc = document.createElement("td");
+  tdLoc.appendChild(loc);
+  tr.append(...tds, tdLoc);
+  return tr;
+}
+function topEmpty(txt) {
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.textContent = txt;
+  tr.appendChild(td);
+  return tr;
+}
+const inLng = (lo, w, e) =>
+  (lo >= w && lo <= e) || (lo + 360 >= w && lo + 360 <= e) ||
+  (lo - 360 >= w && lo - 360 <= e);
+
 function updateTopRegions() {
   const b = map.getBounds();
-  let w = b.getWest(), e = b.getEast();
+  const w = b.getWest(), e = b.getEast();
   const s = b.getSouth(), n = b.getNorth();
+  const tb = document.getElementById("top-table");
+  const title = document.getElementById("top-title");
+  const note = document.getElementById("top-note");
+  tb.textContent = "";
+
+  if (displayRes() === 6) {
+    /* --- individual cells in view (res-6 tier active) --------------------- */
+    const T = TIERS[6], PAD = 1.0;
+    const cand = [];   // [credit, lat, lng]
+    for (let j = 0; j < NP; j++) {
+      const la3 = r3Lat[j];
+      if (la3 < s - PAD || la3 > n + PAD) continue;
+      const padLng = Math.min(8, PAD / Math.max(0.15, Math.cos(la3 * Math.PI / 180)));
+      if (!inLng(r3Lng[j], w - padLng, e + padLng)) continue;
+      const parent = idAt3(j), base = j * T.B;
+      let idx = T.off[j];
+      for (let by = 0; by < T.B; by++) {
+        const v = T.bm[base + by];
+        if (v === 0) continue;
+        for (let bit = 0; bit < 8; bit++) {
+          if (!(v >> bit & 1)) continue;
+          if (T.tc[idx] > 1) {   // level 1 = credit 0; >1 = paid credit
+            const [la, lo] = h3.cellToLatLng(childId(parent, 6, by * 8 + bit));
+            if (la >= s && la <= n && inLng(lo, w, e))
+              cand.push([dec.credit6(lev2t8(T.tc[idx])), la, lo]);
+          }
+          idx++;
+        }
+      }
+    }
+    cand.sort((a, z) => z[0] - a[0]);
+    title.textContent = "Top cells — in view";
+    note.textContent = "% = the cell’s paid credit this month (undercut of " +
+      "its own 5-year baseline × neighbourhood weight). Click → to fly.";
+    cand.slice(0, 10).forEach(([cr, la, lo], i) => {
+      tb.appendChild(topRow(i, [
+        ["rk", String(i + 1)], ["", fmtCoord(la, lo)],
+        ["cr", (cr * 100).toFixed(1) + "%"]
+      ], la, lo, 9.2));
+    });
+    if (cand.length === 0) tb.appendChild(topEmpty("no credited cells in view"));
+    return;
+  }
+
+  /* --- res-3 regions intersecting the view (padded by a circumradius) ------- */
   const global = e - w >= 360 && s <= -60 && n >= 75;
-  const idxs = [];
-  /* pad by a res-3 circumradius so regions intersecting the view count,
-     not only those whose center is on screen */
   const PAD = 0.8;
+  const idxs = [];
   for (let j = 0; j < NP; j++) {
     if (R3.credit[j] <= 0) continue;
     if (!global) {
       const la = r3Lat[j];
       if (la < s - PAD || la > n + PAD) continue;
       const padLng = Math.min(8, PAD / Math.max(0.15, Math.cos(la * Math.PI / 180)));
-      const lo = r3Lng[j];
-      if (!(lo >= w - padLng && lo <= e + padLng) &&
-          !(lo + 360 >= w - padLng && lo + 360 <= e + padLng) &&
-          !(lo - 360 >= w - padLng && lo - 360 <= e + padLng)) continue;
+      if (!inLng(r3Lng[j], w - padLng, e + padLng)) continue;
     }
     idxs.push(j);
   }
   idxs.sort((a, z) => R3.credit[z] - R3.credit[a]);
-
-  document.getElementById("top-title").textContent =
-    "Top regions — " + (global ? monthName(META.month) : "in view");
-  const tb = document.getElementById("top-table");
-  tb.textContent = "";
+  title.textContent = "Top regions — " + (global ? monthName(META.month) : "in view");
+  note.textContent = "Σ = paid credit summed over the res-6 cells of a " +
+    "~12,400 km² region this month, with the number of credited cells. " +
+    "Zoom in for individual cells. Click → to fly.";
   idxs.slice(0, 10).forEach((j, i) => {
-    const tr = document.createElement("tr");
-    const loc = document.createElement("button");
-    loc.className = "loc"; loc.textContent = "→";
-    loc.setAttribute("aria-label", "Fly to region " + (i + 1));
-    loc.addEventListener("click", () => {
-      flyMarker.setLngLat([r3Lng[j], r3Lat[j]]).addTo(map);
-      map.flyTo({ center: [r3Lng[j], r3Lat[j]], zoom: 6.6 });
-    });
     const cr = R3.credit[j];
-    const tds = [
+    tb.appendChild(topRow(i, [
       ["rk", String(i + 1)], ["", fmtCoord(r3Lat[j], r3Lng[j])],
       ["", R3.ncr[j] + "c"],
       ["cr", "Σ " + (cr >= 10 ? cr.toFixed(1) : cr.toFixed(2))]
-    ].map(([cls, txt]) => {
-      const td = document.createElement("td");
-      if (cls) td.className = cls;
-      td.textContent = txt;
-      return td;
-    });
-    const tdLoc = document.createElement("td");
-    tdLoc.appendChild(loc);
-    tr.append(...tds, tdLoc);
-    tb.appendChild(tr);
+    ], r3Lat[j], r3Lng[j], 6.6));
   });
-  if (idxs.length === 0) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.textContent = "no credited regions in view";
-    tr.appendChild(td);
-    tb.appendChild(tr);
-  }
+  if (idxs.length === 0) tb.appendChild(topEmpty("no credited regions in view"));
 }
 function buildFooter() {
   const s = META.stats, f = document.getElementById("stats");
