@@ -57,10 +57,36 @@
     border: 1px solid var(--line); border-radius: 3px;
     color: var(--ink); background: var(--panel-2);
     white-space: nowrap;
+    margin-left: auto;
+  }
+
+  /* --- Left rail: layer card, global signal, region detail ---------------- */
+  #rail {
+    position: absolute; left: 12px; top: 12px; bottom: 12px;
+    width: 336px;
+    display: flex; flex-direction: column; gap: 10px;
+    z-index: 4;
+    pointer-events: none;
+  }
+  #rail > * { pointer-events: auto; }
+  #sheet {
+    display: flex; flex-direction: column; gap: 10px;
+    flex: 1; min-height: 0;
+    pointer-events: none;
+  }
+  #sheet > * { pointer-events: auto; }
+
+  #layer-card {
+    background: rgba(17, 26, 32, 0.94);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 9px 10px;
+    display: flex; flex-direction: column; gap: 8px;
   }
   .layers { display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
   .layers button {
-    padding: 6px 13px;
+    flex: 1;
+    padding: 6px 4px;
     font-size: 12.5px;
     color: var(--muted);
     border-right: 1px solid var(--line);
@@ -68,8 +94,8 @@
   }
   .layers button:last-child { border-right: none; }
   .layers button[aria-pressed="true"] { background: var(--panel-2); color: var(--accent); }
-  .legend { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-  .legend canvas { border-radius: 2px; }
+  .legend { display: flex; align-items: center; gap: 8px; }
+  .legend canvas { border-radius: 2px; flex: 1; min-width: 0; height: 10px; }
   .legend .lab {
     font-family: var(--mono); font-size: 10.5px; color: var(--muted);
     font-variant-numeric: tabular-nums;
@@ -94,19 +120,25 @@
 
   /* --- Region hover panel ------------------------------------------------ */
   #region-panel {
-    position: absolute; left: 12px; bottom: 26px;
-    width: 336px;
+    margin-top: auto;
     background: rgba(17, 26, 32, 0.94);
     border: 1px solid var(--line);
     border-radius: 5px;
     padding: 11px 12px;
-    z-index: 4;
   }
+  #region-panel.pinned { border-color: rgba(79, 214, 194, 0.45); }
   #region-panel[hidden] { display: none; }
   #region-panel .rp-head {
-    display: flex; justify-content: space-between; align-items: baseline;
+    display: flex; align-items: baseline; gap: 10px;
     margin-bottom: 8px;
   }
+  #region-panel .rp-head span { margin-left: auto; }
+  #rp-close {
+    color: var(--muted);
+    font-size: 15px; line-height: 1;
+    padding: 0 2px;
+  }
+  #rp-close:hover { color: var(--ink); }
   #region-panel .rp-head b {
     font-family: var(--mono); font-size: 12.5px; font-weight: 600;
     font-variant-numeric: tabular-nums; white-space: nowrap;
@@ -134,22 +166,21 @@
     margin-top: 5px; font-size: 10.5px; color: var(--muted);
   }
 
-  /* --- Side panel --------------------------------------------------------- */
+  /* --- Global signal panel ------------------------------------------------ */
   aside {
-    position: absolute; top: 12px; right: 12px;
-    width: 330px; max-height: calc(100% - 24px);
+    flex: 0 1 auto; min-height: 0;
     display: flex; flex-direction: column;
     background: rgba(17, 26, 32, 0.94);
     border: 1px solid var(--line);
     border-radius: 5px;
     overflow: hidden;
-    z-index: 4;
   }
   aside.collapsed .body { display: none; }
   aside .head {
     display: flex; align-items: center; justify-content: space-between;
     padding: 9px 12px;
     border-bottom: 1px solid var(--line);
+    cursor: pointer;
   }
   aside.collapsed .head { border-bottom: none; }
   aside .head h2 { font-size: 12px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
@@ -199,10 +230,28 @@
   footer b { color: var(--ink); font-family: var(--mono); font-weight: 500; font-variant-numeric: tabular-nums; }
   footer .gen { margin-left: auto; }
 
+  /* --- Mobile: compact layer card top-left, bottom sheet ------------------ */
   @media (max-width: 860px) {
-    aside { display: none; }
-    #region-panel { width: calc(100% - 24px); }
-    .legend { margin-left: 0; }
+    footer { display: none; }
+    #rail { display: contents; }
+    #layer-card {
+      position: absolute; top: 8px; left: 8px;
+      width: 210px;
+      z-index: 4;
+      padding: 7px 8px; gap: 6px;
+    }
+    .layers button { padding: 5px 2px; font-size: 11.5px; }
+    #sheet {
+      position: absolute; left: 8px; right: 8px; bottom: 8px;
+      gap: 8px;
+      z-index: 4;
+    }
+    #sheet > * { pointer-events: auto; }
+    #region-panel { order: -1; margin-top: 0; }
+    aside .body { max-height: 52vh; }
+  }
+  @media (max-width: 520px) {
+    .wordmark span { display: none; }
   }
   @media (prefers-reduced-motion: no-preference) {
     .layers button, .top-block button.loc { transition: color 120ms, background 120ms, border-color 120ms; }
@@ -214,46 +263,56 @@
 <header>
   <div class="wordmark"><b>keano</b><span>global NO₂ · H3 reduction panel</span></div>
   <span class="month-chip" id="month-chip"></span>
-  <div class="layers" role="group" aria-label="Map layer" id="layer-buttons"></div>
-  <div class="legend">
-    <span class="lab" id="legend-min"></span>
-    <canvas id="legend-bar" width="150" height="10"></canvas>
-    <span class="lab" id="legend-max"></span>
-  </div>
 </header>
 
 <main>
   <div id="map"></div>
   <div id="loading">loading hexagon data …</div>
 
-  <div id="region-panel" hidden>
-    <div class="rp-head"><b id="rp-title"></b><span id="rp-sub"></span></div>
-    <div class="rp-metrics" id="rp-metrics"></div>
-    <canvas id="rp-chart" height="84"></canvas>
-    <p class="rp-note" id="rp-note"></p>
-  </div>
+  <div id="rail">
+    <div id="layer-card">
+      <div class="layers" role="group" aria-label="Map layer" id="layer-buttons"></div>
+      <div class="legend">
+        <span class="lab" id="legend-min"></span>
+        <canvas id="legend-bar" width="150" height="10"></canvas>
+        <span class="lab" id="legend-max"></span>
+      </div>
+    </div>
 
-  <aside id="panel">
-    <div class="head">
-      <h2>Global signal</h2>
-      <button id="panel-toggle" aria-label="Collapse panel">–</button>
+    <div id="sheet">
+      <aside id="panel">
+        <div class="head">
+          <h2>Global signal</h2>
+          <button id="panel-toggle" aria-label="Collapse panel">–</button>
+        </div>
+        <div class="body">
+          <div class="chart-block">
+            <h3>Mean YoY change, eligible cells <span class="now" id="perf-now"></span></h3>
+            <canvas id="chart-perf" height="74"></canvas>
+          </div>
+          <div class="chart-block">
+            <h3>Total credit issued <span class="now" id="credit-now"></span></h3>
+            <canvas id="chart-credit" height="74"></canvas>
+          </div>
+          <div class="top-block">
+            <h3 id="top-title">Top regions</h3>
+            <table id="top-table"></table>
+            <p class="note" id="top-note"></p>
+          </div>
+        </div>
+      </aside>
+
+      <div id="region-panel" hidden>
+        <div class="rp-head">
+          <b id="rp-title"></b><span id="rp-sub"></span>
+          <button id="rp-close" aria-label="Close region panel">×</button>
+        </div>
+        <div class="rp-metrics" id="rp-metrics"></div>
+        <canvas id="rp-chart" height="84"></canvas>
+        <p class="rp-note" id="rp-note"></p>
+      </div>
     </div>
-    <div class="body">
-      <div class="chart-block">
-        <h3>Mean YoY change, eligible cells <span class="now" id="perf-now"></span></h3>
-        <canvas id="chart-perf" height="74"></canvas>
-      </div>
-      <div class="chart-block">
-        <h3>Total credit issued <span class="now" id="credit-now"></span></h3>
-        <canvas id="chart-credit" height="74"></canvas>
-      </div>
-      <div class="top-block">
-        <h3 id="top-title">Top regions</h3>
-        <table id="top-table"></table>
-        <p class="note" id="top-note"></p>
-      </div>
-    </div>
-  </aside>
+  </div>
 </main>
 
 <footer id="stats"></footer>
@@ -553,13 +612,13 @@ const RAMPS = {
   credit: ["#13272c", "#155e56", "#27a08c", "#5fd6bd", "#c9fff1"]
 };
 const LAYERS = [
-  { key: "m",      prop: "tm", label: "NO₂ level" },
-  { key: "yoy",    prop: "ty", label: "Year over year" },
-  { key: "trend",  prop: "tt", label: "Long-term trend" },
-  { key: "credit", prop: "tc", label: "Credit" }
+  { key: "trend",  prop: "tt", label: "Trend",  title: "Long-term trend" },
+  { key: "credit", prop: "tc", label: "Credit", title: "Credit" },
+  { key: "yoy",    prop: "ty", label: "YoY",    title: "Year-over-year change" },
+  { key: "m",      prop: "tm", label: "NO₂",    title: "NO₂ level (12-month mean)" }
 ];
 let activeLayer = LAYERS.some(l => l.key === location.hash.slice(1))
-  ? location.hash.slice(1) : "m";
+  ? location.hash.slice(1) : "trend";
 const layerDef = key => LAYERS.find(l => l.key === key);
 
 function fillExpr(key) {
@@ -620,6 +679,7 @@ const map = new maplibregl.Map({
   container: "map",
   style: {
     version: 8,
+    projection: { type: "globe" },
     sources: {
       basemap: {
         type: "raster",
@@ -641,6 +701,7 @@ const map = new maplibregl.Map({
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }));
 if (maplibregl.GlobeControl) map.addControl(new maplibregl.GlobeControl());
 map.addControl(new maplibregl.AttributionControl({ compact: true }));
+window._keanoMap = map;   // console/test access
 
 const EMPTY = { type: "FeatureCollection", features: [] };
 function displayRes() {
@@ -683,6 +744,7 @@ function setupMap() {
 
   map.on("moveend", () => { updateFine(); updateTopRegions(); });
   map.on("mousemove", onHover);
+  map.on("click", onClick);
   map.on("zoomend", () => { if (activeLayer === "credit") drawLegend(); });
   // globe <-> mercator flips what getBounds() covers without a moveend
   map.on("projectiontransition", scheduleFineRefresh);
@@ -780,18 +842,40 @@ function setHover(next) {
     hovered = next;
   }
 }
+function pickHex(point) {
+  const feats = map.queryRenderedFeatures(point, { layers: ["fine-fill", "r3-fill"] });
+  return feats.find(x => x.layer.id === "fine-fill") ||
+         feats.find(x => x.layer.id === "r3-fill");
+}
+let pinned = false;   // click/tap freezes the region panel until × or empty click
 function onHover(e) {
-  const feats = map.queryRenderedFeatures(e.point, { layers: ["fine-fill", "r3-fill"] });
-  const f = feats.find(x => x.layer.id === "fine-fill") ||
-            feats.find(x => x.layer.id === "r3-fill");
-  if (!f) {
-    setHover(null);
-    map.getCanvas().style.cursor = "";
-    return;
-  }
-  map.getCanvas().style.cursor = "crosshair";
+  const f = pickHex(e.point);
+  map.getCanvas().style.cursor = f ? "crosshair" : "";
+  if (pinned) return;
+  if (!f) { setHover(null); return; }
   setHover({ source: f.layer.id === "fine-fill" ? "fine" : "r3", id: f.id });
   showRegion(f);
+}
+function onClick(e) {
+  // desktop inspects by hover; click-to-pin is for touch, where hover doesn't exist
+  if (window.matchMedia("(hover: hover)").matches) return;
+  const f = pickHex(e.point);
+  if (f) {
+    pinned = true;
+    rp.panel.classList.add("pinned");
+    setHover({ source: f.layer.id === "fine-fill" ? "fine" : "r3", id: f.id });
+    shownRegion = null;   // redraw even if this hex is already shown
+    showRegion(f);
+  } else if (pinned) {
+    unpinRegion();
+  }
+}
+function unpinRegion() {
+  pinned = false;
+  rp.panel.classList.remove("pinned");
+  rp.panel.hidden = true;
+  shownRegion = null;
+  setHover(null);
 }
 
 const rp = {
@@ -802,6 +886,7 @@ const rp = {
   chart: document.getElementById("rp-chart"),
   note: document.getElementById("rp-note")
 };
+document.getElementById("rp-close").addEventListener("click", unpinRegion);
 const AREA = { 3: "~12 400 km²", 4: "~1 770 km²", 5: "~250 km²", 6: "~36 km²" };
 let shownRegion = null;
 function showRegion(f) {
@@ -944,6 +1029,7 @@ const layerBtns = document.getElementById("layer-buttons");
 LAYERS.forEach(l => {
   const b = document.createElement("button");
   b.textContent = l.label;
+  b.title = l.title;
   b.setAttribute("aria-pressed", String(l.key === activeLayer));
   b.addEventListener("click", () => {
     activeLayer = l.key;
@@ -1174,15 +1260,19 @@ function buildFooter() {
   gen.textContent = META.month + " · generated " + META.generated;
   f.append(gen);
 }
-document.getElementById("panel-toggle").addEventListener("click", () => {
+function setPanelOpen(open) {
   const p = document.getElementById("panel");
-  p.classList.toggle("collapsed");
+  p.classList.toggle("collapsed", !open);
   const btn = document.getElementById("panel-toggle");
-  const open = !p.classList.contains("collapsed");
   btn.textContent = open ? "–" : "+";
   btn.setAttribute("aria-label", open ? "Collapse panel" : "Expand panel");
   if (open) drawCharts();
+}
+document.querySelector("aside .head").addEventListener("click", () => {
+  setPanelOpen(document.getElementById("panel").classList.contains("collapsed"));
 });
+// phones: start with the sheet collapsed to its grab bar
+if (window.matchMedia("(max-width: 860px)").matches) setPanelOpen(false);
 
 /* --- Init ------------------------------------------------------------------------------ */
 document.getElementById("month-chip").textContent = monthName(META.month);
