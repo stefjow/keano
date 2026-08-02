@@ -60,6 +60,51 @@
     margin-left: auto;
   }
 
+  #about-link {
+    color: var(--muted); font-size: 12px;
+    letter-spacing: 0.07em; text-transform: uppercase;
+  }
+  #about-link:hover { color: var(--accent); }
+
+  /* --- About overlay ------------------------------------------------------- */
+  #about {
+    position: fixed; inset: 0;
+    background: rgba(10, 16, 20, 0.72);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+    z-index: 30;
+  }
+  #about[hidden] { display: none; }
+  .about-card {
+    width: 640px; max-width: 100%; max-height: 85vh;
+    display: flex; flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .about-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .about-head h2 {
+    font-size: 12px; font-weight: 600;
+    letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted);
+  }
+  #about-close { color: var(--muted); font-size: 16px; line-height: 1; padding: 0 2px; }
+  #about-close:hover { color: var(--ink); }
+  .about-body { overflow-y: auto; padding: 14px 16px 18px; }
+  .about-body h3 {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--accent);
+    margin: 14px 0 5px;
+  }
+  .about-body h3:first-child { margin-top: 0; }
+  .about-body p { font-size: 13px; line-height: 1.55; margin-bottom: 8px; }
+  .about-body b { font-weight: 600; }
+  .about-attrib { color: var(--muted); font-size: 11.5px; margin-top: 12px; }
+
   /* --- Left rail: layer card, global signal, region detail ---------------- */
   #rail {
     position: absolute; left: 12px; top: 12px; bottom: 12px;
@@ -272,7 +317,72 @@
 <header>
   <div class="wordmark"><b>keano</b><span>global NO₂ · H3 reduction panel</span></div>
   <span class="month-chip" id="month-chip"></span>
+  <button id="about-link">about</button>
 </header>
+
+<div id="about" hidden>
+  <div class="about-card">
+    <div class="about-head">
+      <h2>About keano</h2>
+      <button id="about-close" aria-label="Close about">×</button>
+    </div>
+    <div class="about-body">
+      <h3>What is this?</h3>
+      <p>keano tracks tropospheric NO₂ — a combustion byproduct and a good
+      proxy for local air pollution — for every ~36 km² hexagon on Earth,
+      and scores each cell's reduction performance, month by month since
+      May 2018.</p>
+
+      <h3>The data</h3>
+      <p>Sentinel-5P/TROPOMI monthly global NO₂ columns (Terrascope L3,
+      0.02° grid, quality-filtered), averaged into H3 resolution-6 hexagons
+      with coverage weighting. Values are tropospheric column densities in
+      µmol/m² — the amount of NO₂ in the air column above a hex, not a
+      surface concentration.</p>
+
+      <h3>The workhorse series: m</h3>
+      <p>Every score builds on <b>m</b>, the trailing 12-month mean of
+      monthly NO₂. Averaging a full year removes seasonality by
+      construction and smooths retrieval noise. Only past months enter, so
+      every score is causal: new months append, closed months never
+      change.</p>
+
+      <h3>The layers</h3>
+      <p><b>Trend</b> — annualized change of m since the cell's first full
+      year: the slow, structural signal.<br>
+      <b>YoY</b> — m now versus m one year ago: the fast signal.<br>
+      <b>NO₂</b> — the current level of m.<br>
+      <b>Credit</b> — see below.</p>
+
+      <h3>Credits</h3>
+      <p>A cell earns credit when m undercuts its own historical minimum —
+      the baseline B is the lowest m over the window from 5 years to
+      1 year ago ("the best year that ended at least a year ago") — by more
+      than a 2% noise margin. Credit is the relative undercut
+      (B − m)/B, so clean and dirty cells compete symmetrically, and
+      records expire after five years, so every cell periodically has
+      something to earn. Two guards keep it honest:</p>
+      <p><b>Eligibility floor.</b> Only cells with m ≥ 30 µmol/m² are
+      scored — percent changes are meaningless at background noise
+      level.<br>
+      <b>Neighbourhood gate.</b> NO₂ travels tens of kilometres, so a
+      record low can just be the neighbour's plume blowing elsewhere this
+      year. Full credit is only paid when the surrounding ~1,770 km²
+      region also sits below its own baseline; isolated implausible
+      records are zeroed.</p>
+
+      <h3>The site</h3>
+      <p>Static files, no backend. Metrics are packed into binary planes;
+      the per-hex trend chart is fetched with a ~200-byte HTTP range
+      request on hover. Built with MapLibre GL and H3. Click a hex's
+      ⬡ code to copy a link that jumps straight to it.</p>
+
+      <p class="about-attrib">Contains modified Copernicus Sentinel-5P
+      data, processed by VITO/Terrascope. Basemap
+      © OpenStreetMap contributors © CARTO.</p>
+    </div>
+  </div>
+</div>
 
 <main>
   <div id="map"></div>
@@ -1314,6 +1424,13 @@ document.querySelector("aside .head").addEventListener("click", () => {
 });
 // phones: start with the sheet collapsed to its grab bar
 if (window.matchMedia("(max-width: 860px)").matches) setPanelOpen(false);
+
+/* --- About overlay ----------------------------------------------------------------- */
+const about = document.getElementById("about");
+document.getElementById("about-link").addEventListener("click", () => { about.hidden = false; });
+document.getElementById("about-close").addEventListener("click", () => { about.hidden = true; });
+about.addEventListener("click", e => { if (e.target === about) about.hidden = true; });
+window.addEventListener("keydown", e => { if (e.key === "Escape") about.hidden = true; });
 
 /* --- Init ------------------------------------------------------------------------------ */
 document.getElementById("month-chip").textContent = monthName(META.month);
