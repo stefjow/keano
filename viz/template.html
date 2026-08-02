@@ -139,6 +139,8 @@
     padding: 0 2px;
   }
   #rp-close:hover { color: var(--ink); }
+  /* hover devices: the next mousemove would re-show the panel anyway */
+  @media (hover: hover) { #rp-close { display: none; } }
   #region-panel .rp-head b {
     font-family: var(--mono); font-size: 12.5px; font-weight: 600;
     font-variant-numeric: tabular-nums; white-space: nowrap;
@@ -684,9 +686,15 @@ const map = new maplibregl.Map({
       basemap: {
         type: "raster",
         tiles: ["a", "b", "c", "d"].map(s =>
-          `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png`),
+          `https://${s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png`),
         tileSize: 256, maxzoom: 19,
         attribution: "© OpenStreetMap contributors © CARTO"
+      },
+      labels: {   // drawn above the hex fills, so text stays readable
+        type: "raster",
+        tiles: ["a", "b", "c", "d"].map(s =>
+          `https://${s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png`),
+        tileSize: 256, maxzoom: 19
       }
     },
     layers: [
@@ -740,6 +748,10 @@ function setupMap() {
   map.addLayer({
     id: "fine-line", type: "line", source: "fine", minzoom: 7.5,
     paint: { "line-color": "rgba(213,227,225,0.22)", "line-width": 0.5 }
+  });
+  map.addLayer({
+    id: "labels", type: "raster", source: "labels",
+    paint: { "raster-opacity": 0.9 }
   });
 
   map.on("moveend", () => { updateFine(); updateTopRegions(); });
