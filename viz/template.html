@@ -133,6 +133,13 @@
     margin-bottom: 8px;
   }
   #region-panel .rp-head span { margin-left: auto; }
+  .rp-h3 {
+    display: block;
+    font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+    padding: 0;
+    margin: -4px 0 8px;
+  }
+  .rp-h3:hover { color: var(--accent); }
   #rp-close {
     color: var(--muted);
     font-size: 15px; line-height: 1;
@@ -309,6 +316,7 @@
           <b id="rp-title"></b><span id="rp-sub"></span>
           <button id="rp-close" aria-label="Close region panel">×</button>
         </div>
+        <button class="rp-h3" id="rp-h3" title="Copy link to this hex"></button>
         <div class="rp-metrics" id="rp-metrics"></div>
         <canvas id="rp-chart" height="84"></canvas>
         <p class="rp-note" id="rp-note"></p>
@@ -619,8 +627,11 @@ const LAYERS = [
   { key: "credit", prop: "tc", label: "Credit", title: "Credit" },
   { key: "m",      prop: "tm", label: "NO₂",    title: "NO₂ level (12-month mean)" }
 ];
-let activeLayer = LAYERS.some(l => l.key === location.hash.slice(1))
-  ? location.hash.slice(1) : "trend";
+/* Hash routing: #<layer> or #<layer>/<h3-id> (deep link to a hex) */
+const HASH = location.hash.slice(1).split("/");
+let activeLayer = LAYERS.some(l => l.key === HASH[0]) ? HASH[0] : "trend";
+const startHex = HASH[1] && h3.isValidCell(HASH[1]) ? HASH[1] : null;
+const HEX_ZOOM = { 3: 6.6, 4: 7.5, 5: 8.4, 6: 9.2 };
 const layerDef = key => LAYERS.find(l => l.key === key);
 
 function fillExpr(key) {
@@ -703,7 +714,11 @@ const map = new maplibregl.Map({
         paint: { "raster-opacity": 0.85 } }
     ]
   },
-  center: [12, 30], zoom: 1.6, minZoom: 1, maxZoom: 13,
+  ...(startHex
+    ? { center: h3.cellToLatLng(startHex).reverse(),
+        zoom: HEX_ZOOM[h3.getResolution(startHex)] || 9.2 }
+    : { center: [12, 30], zoom: 1.6 }),
+  minZoom: 1, maxZoom: 13,
   attributionControl: false
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }));
@@ -762,6 +777,10 @@ function setupMap() {
   map.on("projectiontransition", scheduleFineRefresh);
   updateFine();
   updateTopRegions();
+  if (startHex) {
+    const [la, lo] = h3.cellToLatLng(startHex);
+    flyMarker.setLngLat([lo, la]).addTo(map);
+  }
   loading.remove();
   if (WEB) { loadSeries(); tierReady(4); }   // small, wanted soon — prefetch
 }
@@ -894,11 +913,20 @@ const rp = {
   panel: document.getElementById("region-panel"),
   title: document.getElementById("rp-title"),
   sub: document.getElementById("rp-sub"),
+  h3: document.getElementById("rp-h3"),
   metrics: document.getElementById("rp-metrics"),
   chart: document.getElementById("rp-chart"),
   note: document.getElementById("rp-note")
 };
 document.getElementById("rp-close").addEventListener("click", unpinRegion);
+rp.h3.addEventListener("click", () => {
+  if (!shownRegion) return;
+  const url = location.origin + location.pathname + "#" + activeLayer + "/" + shownRegion;
+  navigator.clipboard.writeText(url).then(() => {
+    rp.h3.textContent = "⬡ " + shownRegion + " — link copied";
+    setTimeout(() => { rp.h3.textContent = "⬡ " + shownRegion; }, 1200);
+  });
+});
 const AREA = { 3: "~12 400 km²", 4: "~1 770 km²", 5: "~250 km²", 6: "~36 km²" };
 let shownRegion = null;
 function showRegion(f) {
@@ -911,6 +939,7 @@ function showRegion(f) {
   rp.title.textContent = fmtCoord(lat, lng);
   rp.sub.textContent = (res === 6 ? "cell" : "region") +
                        " · res " + res + " · " + AREA[res];
+  rp.h3.textContent = "⬡ " + P.id;
 
   const cards = [
     ["NO₂ m", "m", P.tm, "µmol/m²"],
