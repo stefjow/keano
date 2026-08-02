@@ -615,8 +615,8 @@ const RAMPS = {
 };
 const LAYERS = [
   { key: "trend",  prop: "tt", label: "Trend",  title: "Long-term trend" },
-  { key: "credit", prop: "tc", label: "Credit", title: "Credit" },
   { key: "yoy",    prop: "ty", label: "YoY",    title: "Year-over-year change" },
+  { key: "credit", prop: "tc", label: "Credit", title: "Credit" },
   { key: "m",      prop: "tm", label: "NO₂",    title: "NO₂ level (12-month mean)" }
 ];
 let activeLayer = LAYERS.some(l => l.key === location.hash.slice(1))
