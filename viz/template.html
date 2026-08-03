@@ -335,54 +335,54 @@
     </div>
     <div class="about-body">
       <h3>What is this?</h3>
-      <p>keano tracks tropospheric NO₂ — a combustion byproduct and a good
-      proxy for local air pollution — for every ~36 km² hexagon on Earth,
-      and scores each cell's reduction performance, month by month since
-      May 2018.</p>
+      <p>keano tracks NO₂ pollution in every ~36 km² hexagon on Earth and
+      scores how well each one is cleaning up, month by month since
+      May 2018. NO₂ comes mostly from combustion, which makes it a decent
+      proxy for local air pollution.</p>
 
       <h3>The data</h3>
-      <p>Sentinel-5P/TROPOMI monthly global NO₂ columns (Terrascope L3,
-      0.02° grid, quality-filtered), averaged into H3 resolution-6 hexagons
-      with coverage weighting. Values are tropospheric column densities in
-      µmol/m² — the amount of NO₂ in the air column above a hex, not a
-      surface concentration.</p>
+      <p>Monthly global NO₂ from Sentinel-5P/TROPOMI (Terrascope L3,
+      0.02° grid, quality-filtered), averaged into H3 resolution-6
+      hexagons with coverage weighting. The values are tropospheric column
+      densities in µmol/m²: the total NO₂ in the air column above a hex,
+      not what you would measure at the surface.</p>
 
-      <h3>The workhorse series: m</h3>
-      <p>Every score builds on <b>m</b>, the trailing 12-month mean of
-      monthly NO₂. Averaging a full year removes seasonality by
-      construction and smooths retrieval noise. Only past months enter, so
-      every score is causal: new months append, closed months never
-      change.</p>
+      <h3>The base series: m</h3>
+      <p>Everything is computed from <b>m</b>, the average NO₂ over the
+      trailing 12 months. Averaging a full year at a time removes the
+      seasonal cycle and smooths out retrieval noise. Since m only uses
+      past months, scores are never revised: a new month appends, closed
+      months stay as they were.</p>
 
       <h3>The layers</h3>
-      <p><b>Trend</b> — annualized change of m since the cell's first full
-      year: the slow, structural signal.<br>
-      <b>YoY</b> — m now versus m one year ago: the fast signal.<br>
-      <b>NO₂</b> — the current level of m.<br>
-      <b>Credit</b> — see below.</p>
+      <p><b>Trend</b> is the annualized change of m since the cell's first
+      full year, <b>YoY</b> compares m to its value one year earlier, and
+      <b>NO₂</b> shows the current level of m. <b>Credit</b> is explained
+      below.</p>
 
       <h3>Credits</h3>
-      <p>A cell earns credit when m undercuts its own historical minimum —
-      the baseline B is the lowest m over the window from 5 years to
-      1 year ago ("the best year that ended at least a year ago") — by more
-      than a 2% noise margin. Credit is the relative undercut
-      (B − m)/B, so clean and dirty cells compete symmetrically, and
-      records expire after five years, so every cell periodically has
-      something to earn. Two guards keep it honest:</p>
-      <p><b>Eligibility floor.</b> Only cells with m ≥ 30 µmol/m² are
-      scored — percent changes are meaningless at background noise
-      level.<br>
-      <b>Neighbourhood gate.</b> NO₂ travels tens of kilometres, so a
-      record low can just be the neighbour's plume blowing elsewhere this
-      year. Full credit is only paid when the surrounding ~1,770 km²
-      region also sits below its own baseline; isolated implausible
-      records are zeroed.</p>
+      <p>A cell earns credit when m drops below its own historical
+      minimum. The baseline B is the lowest m in the window from 5 years
+      ago to 1 year ago, i.e. the best year that ended at least a year
+      ago, and m has to undercut it by more than a 2% noise margin.
+      Credit is the relative undercut (B − m)/B, so a clean cell and a
+      dirty cell earn the same for the same percentage improvement.
+      Records expire after five years, which means every cell
+      periodically has something new to earn.</p>
+      <p>Two extra rules apply. Only cells with m ≥ 30 µmol/m² are
+      scored, because percent changes mean nothing at background noise
+      level. And since NO₂ travels tens of kilometres, a record low can
+      simply be the neighbour's plume blowing somewhere else this year,
+      so full credit is only paid when the surrounding ~1,770 km² region
+      is also below its own baseline. Isolated implausible records are
+      zeroed.</p>
 
       <h3>The site</h3>
-      <p>Static files, no backend. Metrics are packed into binary planes;
-      the per-hex trend chart is fetched with a ~200-byte HTTP range
-      request on hover. Built with MapLibre GL and H3. Click a hex's
-      ⬡ code to copy a link that jumps straight to it.</p>
+      <p>The whole thing is static files, no backend. Metrics are packed
+      into binary planes, and the per-hex trend chart is fetched with a
+      ~200-byte HTTP range request on hover. Built with MapLibre GL
+      and H3. Clicking a hex's ⬡ code copies a link that jumps straight
+      to it.</p>
 
       <p class="about-attrib">Contains modified Copernicus Sentinel-5P
       data, processed by VITO/Terrascope. Basemap
