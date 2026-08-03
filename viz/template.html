@@ -139,6 +139,13 @@
   }
   .layers button:last-child { border-right: none; }
   .layers button[aria-pressed="true"] { background: var(--panel-2); color: var(--accent); }
+  /* 3D toggle in the map control stack (matches maplibre's ctrl buttons) */
+  .ctrl-3d button {
+    font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+    color: #333;
+  }
+  .ctrl-3d button[aria-pressed="true"] { background: var(--accent); color: #0a1014; }
+  .ctrl-3d button[aria-pressed="true"]:hover { background: #6de2d0; }
   .legend { display: flex; align-items: center; gap: 8px; }
   .legend canvas { border-radius: 2px; flex: 1; min-width: 0; height: 10px; }
   .legend .lab {
@@ -770,6 +777,54 @@ function applyLayerPaint(key) {
     map.setPaintProperty(id, "fill-color", fillExpr(key));
     map.setPaintProperty(id, "fill-opacity", opacityExpr(key, BASE_OPACITY[id]));
   }
+  apply3dPaint(key);
+}
+
+/* --- 3D mode: extrude hexes by value ---------------------------------------- */
+/* Column height carries the same value as the fill color. Diverging layers
+   (yoy/trend) extrude by |change| — color keeps the sign — damped over
+   near-zero NO2, mirroring the value-by-alpha fade of the flat view.
+   The flat fills stay rendered beneath the translucent columns: they are the
+   pick targets (fill-extrusion hit tests are unreliable on the globe) and
+   they backstop the hairline cracks the globe subdivision opens between
+   independently subdivided columns, which would otherwise show the black
+   background as speckle. Every cell gets at least a thin plinth so
+   zero-height tops don't z-fight the ground. */
+let mode3d = false;
+let fineRes3d = 4;                 // res the fine-3d height scale is set for
+const HMAX = { 3: 150000, 4: 50000, 5: 18000, 6: 7000 };   // meters ≈ 1.5× cell width
+function heightExpr(key, res) {
+  const t = ["get", layerDef(key).prop];
+  const mag = (key === "yoy" || key === "trend")
+    ? ["*", ["abs", ["-", ["*", t, 2], 1]],
+       ["interpolate", ["linear"], ["get", "tm"],
+        tOfM(2), 0.05, tOfM(10), 0.25, tOfM(30), 0.6, tOfM(80), 1]]
+    : t;
+  const floor = HMAX[res] * 0.02;
+  return ["case", ["<", t, 0], floor,
+          ["max", ["*", HMAX[res], mag], floor]];
+}
+function extColorExpr(key) {
+  return ["case",
+          ["boolean", ["feature-state", "hover"], false], "#eafff8",
+          ["<", ["get", layerDef(key).prop], 0], "#10181e",
+          fillExpr(key)];
+}
+function apply3dPaint(key) {
+  if (!map.getLayer("r3-3d")) return;
+  for (const [id, res] of [["r3-3d", 3], ["fine-3d", fineRes3d]]) {
+    map.setPaintProperty(id, "fill-extrusion-color", extColorExpr(key));
+    map.setPaintProperty(id, "fill-extrusion-height", heightExpr(key, res));
+  }
+}
+function setMode3d(on) {
+  mode3d = on;
+  if (ctrl3d.btn) ctrl3d.btn.setAttribute("aria-pressed", String(on));
+  if (!map.getLayer("r3-3d")) return;
+  for (const id of ["r3-3d", "fine-3d"])
+    map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+  applyLayerPaint(activeLayer);
+  map.easeTo({ pitch: on ? 50 : 0, duration: 600 });
 }
 
 /* --- Hexagon geometry (client-side from H3 ids) ----------------------------- */
@@ -833,6 +888,26 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }));
 if (maplibregl.GlobeControl) map.addControl(new maplibregl.GlobeControl());
+/* 3D mode is currently not exposed in the UI — re-enable by adding the
+   control below back to the map (map.addControl(ctrl3d)); the mode itself
+   still works via setMode3d(true) from the console. */
+const ctrl3d = {
+  btn: null,
+  onAdd() {
+    const div = document.createElement("div");
+    div.className = "maplibregl-ctrl maplibregl-ctrl-group ctrl-3d";
+    const b = this.btn = document.createElement("button");
+    b.type = "button";
+    b.textContent = "3D";
+    b.title = "Extrude hexagons by value";
+    b.setAttribute("aria-label", "Toggle 3D hexagons");
+    b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", () => setMode3d(!mode3d));
+    div.appendChild(b);
+    return div;
+  },
+  onRemove() {}
+};
 map.addControl(new maplibregl.AttributionControl({ compact: true }));
 window._keanoMap = map;   // console/test access
 
@@ -852,8 +927,11 @@ Promise.all([
 
 const loading = document.getElementById("loading");
 function setupMap() {
-  map.addSource("r3", { type: "geojson", data: buildR3() });
-  map.addSource("fine", { type: "geojson", data: EMPTY });
+  /* tolerance 0: geojson-vt otherwise simplifies each hex independently,
+     opening hairline cracks between neighbours — invisible under the
+     translucent flat fills, black speckle under the opaque 3D columns */
+  map.addSource("r3", { type: "geojson", data: buildR3(), tolerance: 0 });
+  map.addSource("fine", { type: "geojson", data: EMPTY, tolerance: 0 });
 
   map.addLayer({
     id: "r3-fill", type: "fill", source: "r3", maxzoom: Z4 + 0.4,
@@ -873,6 +951,26 @@ function setupMap() {
   map.addLayer({
     id: "fine-line", type: "line", source: "fine", minzoom: 7.5,
     paint: { "line-color": "rgba(213,227,225,0.22)", "line-width": 0.5 }
+  });
+  map.addLayer({
+    id: "r3-3d", type: "fill-extrusion", source: "r3", maxzoom: Z4 + 0.4,
+    layout: { visibility: "none" },
+    paint: {
+      "fill-extrusion-color": extColorExpr(activeLayer),
+      "fill-extrusion-height": heightExpr(activeLayer, 3),
+      "fill-extrusion-opacity": 0.7,
+      "fill-extrusion-vertical-gradient": false
+    }
+  });
+  map.addLayer({
+    id: "fine-3d", type: "fill-extrusion", source: "fine", minzoom: Z4,
+    layout: { visibility: "none" },
+    paint: {
+      "fill-extrusion-color": extColorExpr(activeLayer),
+      "fill-extrusion-height": heightExpr(activeLayer, fineRes3d),
+      "fill-extrusion-opacity": 0.7,
+      "fill-extrusion-vertical-gradient": false
+    }
   });
   map.addLayer({
     id: "labels", type: "raster", source: "labels",
@@ -968,6 +1066,10 @@ function updateFine() {
   }
   setHover(null);
   map.getSource("fine").setData({ type: "FeatureCollection", features: feats });
+  if (r !== fineRes3d && map.getLayer("fine-3d")) {
+    fineRes3d = r;
+    map.setPaintProperty("fine-3d", "fill-extrusion-height", heightExpr(activeLayer, r));
+  }
   fineTier = r;
 }
 
@@ -984,6 +1086,8 @@ function setHover(next) {
   }
 }
 function pickHex(point) {
+  /* always the flat fills — in 3D they are transparent but still pickable,
+     and footprint picking beats fill-extrusion hit tests on the globe */
   const feats = map.queryRenderedFeatures(point, { layers: ["fine-fill", "r3-fill"] });
   return feats.find(x => x.layer.id === "fine-fill") ||
          feats.find(x => x.layer.id === "r3-fill");
@@ -994,7 +1098,7 @@ function onHover(e) {
   map.getCanvas().style.cursor = f ? "crosshair" : "";
   if (pinned) return;
   if (!f) { setHover(null); return; }
-  setHover({ source: f.layer.id === "fine-fill" ? "fine" : "r3", id: f.id });
+  setHover({ source: f.source, id: f.id });
   showRegion(f);
 }
 function onClick(e) {
@@ -1004,7 +1108,7 @@ function onClick(e) {
   if (f) {
     pinned = true;
     rp.panel.classList.add("pinned");
-    setHover({ source: f.layer.id === "fine-fill" ? "fine" : "r3", id: f.id });
+    setHover({ source: f.source, id: f.id });
     shownRegion = null;   // redraw even if this hex is already shown
     showRegion(f);
   } else if (pinned) {
