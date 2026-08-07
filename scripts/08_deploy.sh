@@ -7,7 +7,8 @@
 # months you decided to drop, and index.html is replaced atomically last.
 #
 # Usage:  scripts/08_deploy.sh user@host:/path [ssh-port]
-#         (or set DEPLOY_TARGET / DEPLOY_PORT; port defaults to 22)
+#         (or set DEPLOY_TARGET / DEPLOY_PORT — via the environment or a
+#         gitignored .deploy.env in the repo root; port defaults to 22)
 #
 # nginx for the target directory:
 #
@@ -26,6 +27,9 @@
 set -euo pipefail
 
 SRC="$(dirname "$0")/../data/viz/web/"
+ENV_FILE="$(dirname "$0")/../.deploy.env"
+[[ -f "$ENV_FILE" ]] && source "$ENV_FILE"
+
 TARGET="${1:-${DEPLOY_TARGET:-}}"
 PORT="${2:-${DEPLOY_PORT:-22}}"
 
