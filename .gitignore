@@ -1,5 +1,6 @@
 data/
 tmp/
+node_modules/
 .Rhistory
 .RData
 .Rproj.user

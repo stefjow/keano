@@ -34,6 +34,11 @@ if [[ ! -f "$SRC/index.html" ]]; then
   exit 1
 fi
 
+# Deploy only on green (set -e aborts on red); SKIP_SMOKE=1 to bypass
+if [[ "${SKIP_SMOKE:-0}" != 1 ]]; then
+  node "$(dirname "$0")/09_smoketest.js"
+fi
+
 # data first (new month appears fully before the new index.html points at it)
 rsync -av -e "ssh -p $PORT" --exclude index.html "$SRC" "$TARGET/"
 rsync -av -e "ssh -p $PORT" "$SRC/index.html" "$TARGET/index.html"

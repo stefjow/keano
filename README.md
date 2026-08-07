@@ -46,6 +46,7 @@ scripts/04_metrics.R       per shard: m, perf_short, perf_long, baseline, credit
 scripts/05_rankings.R      derived views: monthly records, top credits, summaries -> data/rankings/
 scripts/06_viz.R           latest month -> interactive H3 hexagon map -> data/viz/index.html
 scripts/07_publish.R       map + rankings CSVs + README -> PUBLISH_DIR (network share)
+scripts/09_smoketest.js    gate: drives the built web bundle in headless Chrome
 ```
 
 The panel is partitioned `month=YYYY-MM/shard=<h3-res0-parent>` so both
@@ -93,6 +94,13 @@ current viewport only. One template, two builds:
   for `gzip_static`; `data/<month>/` paths are immutable, so far-future
   cache headers apply. Deploy with `scripts/08_deploy.sh user@host:/path`
   (nginx snippet inside).
+
+Both `run_all.R` and the deploy script gate on `scripts/09_smoketest.js`: it
+serves `data/viz/web/` locally and drives it in headless Chrome — hover /
+pin / release, hex and viewport deep links, chart instances, zero page
+errors — once with a hover-capable pointer and once as a touch device.
+Needs `npm install` (puppeteer-core) and a Chrome under `~/.cache/puppeteer`
+or `PUPPETEER_EXECUTABLE_PATH`; `SKIP_SMOKE=1` bypasses the deploy gate.
 
 ## Planned: daily nowcast layer
 
