@@ -199,8 +199,9 @@
     padding: 0 2px;
   }
   #rp-close:hover { color: var(--ink); }
-  /* hover devices: the next mousemove would re-show the panel anyway */
-  @media (hover: hover) { #rp-close { display: none; } }
+  /* hover devices: unpinned panels re-show on the next mousemove anyway,
+     so the × only earns its place once a click has pinned the panel */
+  @media (hover: hover) { #region-panel:not(.pinned) #rp-close { display: none; } }
   #region-panel .rp-head b {
     font-family: var(--mono); font-size: 12.5px; font-weight: 600;
     font-variant-numeric: tabular-nums; white-space: nowrap;
@@ -1103,8 +1104,9 @@ function onHover(e) {
   showRegion(f);
 }
 function onClick(e) {
-  // desktop inspects by hover; click-to-pin is for touch, where hover doesn't exist
-  if (window.matchMedia("(hover: hover)").matches) return;
+  // click pins the panel (re-pins on another hex); hover keeps previewing until then.
+  // On touch this is the only way to inspect; on desktop it holds a hex steady so
+  // the chart tooltip and the H3 copy button are reachable without losing it.
   const f = pickHex(e.point);
   if (f) {
     pinned = true;
@@ -1576,7 +1578,11 @@ const about = document.getElementById("about");
 document.getElementById("about-link").addEventListener("click", () => { about.hidden = false; });
 document.getElementById("about-close").addEventListener("click", () => { about.hidden = true; });
 about.addEventListener("click", e => { if (e.target === about) about.hidden = true; });
-window.addEventListener("keydown", e => { if (e.key === "Escape") about.hidden = true; });
+window.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if (!about.hidden) about.hidden = true;
+  else if (pinned) unpinRegion();
+});
 
 /* --- Init ------------------------------------------------------------------------------ */
 document.getElementById("month-chip").textContent = monthName(META.month);
