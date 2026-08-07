@@ -319,7 +319,7 @@ splice = function(meta_list, bin_b64, out_file) {
   writeLines(paste0(a[1], json, b[1], bin_b64, b[2]), out_file, useBytes = TRUE)
 }
 
-# --- Single-file build (network share: no HTTP, everything embedded) -----------
+# --- Single-file build (network share: no HTTP, everything embedded) ----------
 meta_single = meta
 meta_single$bin_len = length(bin)
 meta_single$manifest = manifest

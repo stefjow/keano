@@ -9,14 +9,22 @@
 source("_share.r")
 
 # --- Paths ------------------------------------------------------------------
-DATA_RAW      = "/path/to/raw"  # append-only archive of monthly global GeoTIFFs (network share)
+# DATA_RAW and PUBLISH_DIR live on infrastructure outside this repo; set
+# KEANO_DATA_RAW / KEANO_PUBLISH_DIR in .Renviron (gitignored). Lazy so
+# scripts that don't touch the share (04-06) run without them.
+env_path = function(var) {
+  val = Sys.getenv(var)
+  if (!nzchar(val)) stop(var, " is not set — add it to .Renviron")
+  val
+}
+delayedAssign("DATA_RAW", env_path("KEANO_DATA_RAW"))  # append-only archive of monthly global GeoTIFFs (network share)
 DATA_CACHE    = "data/raw_cache" # local staging copy for compute (safe to delete)
 DATA_LOOKUP   = "data/lookup"    # one-time pixel -> H3 lookup + cell table
 DATA_PANEL    = "data/panel"     # hive parquet: month=YYYY-MM/shard=<h3res0>
 DATA_METRICS  = "data/metrics"   # hive parquet: shard=<h3res0>
 DATA_RANKINGS = "data/rankings"  # derived views (CSV)
 DATA_VIZ      = "data/viz"       # self-contained HTML map (derived view)
-PUBLISH_DIR   = "/path/to/publish"  # published views (network share)
+delayedAssign("PUBLISH_DIR", env_path("KEANO_PUBLISH_DIR"))  # published views (network share)
 TMP_DIR       = "tmp"            # diagnostics, previews
 
 # --- Data source ------------------------------------------------------------
