@@ -186,11 +186,11 @@
     margin-bottom: 8px;
   }
   #region-panel .rp-head span { margin-left: auto; }
+  .rp-idrow { display: flex; align-items: center; gap: 8px; margin: -4px 0 8px; }
   .rp-h3 {
     display: block;
     font-family: var(--mono); font-size: 10.5px; color: var(--muted);
     padding: 0;
-    margin: -4px 0 8px;
   }
   .rp-h3:hover { color: var(--accent); }
   #rp-close {
@@ -199,9 +199,24 @@
     padding: 0 2px;
   }
   #rp-close:hover { color: var(--ink); }
-  /* hover devices: unpinned panels re-show on the next mousemove anyway,
-     so the × only earns its place once a click has pinned the panel */
-  @media (hover: hover) { #region-panel:not(.pinned) #rp-close { display: none; } }
+  /* pinned-state chip: a mode indicator that releases the pin, not a window
+     close — on hover devices "closing" is meaningless (the next mousemove
+     would re-show the panel), so × stays a touch-only affordance */
+  #rp-pin {
+    display: none;
+    margin-left: auto;
+    white-space: nowrap;
+    color: var(--accent);
+    font-family: var(--mono); font-size: 9.5px;
+    letter-spacing: 0.07em; text-transform: uppercase;
+    border: 1px solid rgba(79, 214, 194, 0.45); border-radius: 3px;
+    padding: 2px 5px;
+  }
+  #rp-pin:hover { border-color: var(--accent); }
+  @media (hover: hover) {
+    #rp-close { display: none; }
+    #region-panel.pinned #rp-pin { display: inline-block; }
+  }
   #region-panel .rp-head b {
     font-family: var(--mono); font-size: 12.5px; font-weight: 600;
     font-variant-numeric: tabular-nums; white-space: nowrap;
@@ -435,7 +450,10 @@
           <b id="rp-title"></b><span id="rp-sub"></span>
           <button id="rp-close" aria-label="Close region panel">×</button>
         </div>
-        <button class="rp-h3" id="rp-h3" title="Copy link to this hex"></button>
+        <div class="rp-idrow">
+          <button class="rp-h3" id="rp-h3" title="Copy link to this hex"></button>
+          <button id="rp-pin" title="Click to unpin · Esc" aria-label="Unpin region panel">⌖ pinned</button>
+        </div>
         <div class="rp-metrics" id="rp-metrics"></div>
         <div id="rp-chart"></div>
         <p class="rp-note" id="rp-note"></p>
@@ -750,7 +768,9 @@ const LAYERS = [
 const HASH = location.hash.slice(1).split("/");
 let activeLayer = LAYERS.some(l => l.key === HASH[0]) ? HASH[0] : "trend";
 const startHex = HASH[1] && h3.isValidCell(HASH[1]) ? HASH[1] : null;
-const HEX_ZOOM = { 3: 6.6, 4: 7.5, 5: 8.4, 6: 9.2 };
+/* arrival zooms sit inside the tier that renders the hex's own res, so the
+   arriving fly-to / deep link can select it (r3-fill ends at maxzoom Z4+0.4) */
+const HEX_ZOOM = { 3: 4.8, 4: 5.6, 5: 6.8, 6: 9.2 };
 const layerDef = key => LAYERS.find(l => l.key === key);
 
 function fillExpr(key) {
@@ -989,7 +1009,7 @@ function setupMap() {
   updateTopRegions();
   if (startHex) {
     const [la, lo] = h3.cellToLatLng(startHex);
-    flyMarker.setLngLat([lo, la]).addTo(map);
+    selectOnArrival(la, lo, startHex, 6);   // map already opens centered on the hex
   }
   loading.remove();
   if (WEB) { loadSeries(); tierReady(4); }   // small, wanted soon — prefetch
@@ -1094,7 +1114,8 @@ function pickHex(point) {
   return feats.find(x => x.layer.id === "fine-fill") ||
          feats.find(x => x.layer.id === "r3-fill");
 }
-let pinned = false;   // click/tap freezes the region panel until × or empty click
+const HOVER_DEV = window.matchMedia("(hover: hover)").matches;
+let pinned = false;   // click/tap freezes the region panel until unpinned
 function onHover(e) {
   const f = pickHex(e.point);
   map.getCanvas().style.cursor = f ? "crosshair" : "";
@@ -1103,27 +1124,58 @@ function onHover(e) {
   setHover({ source: f.source, id: f.id });
   showRegion(f);
 }
+function pinTo(f) {
+  pinned = true;
+  rp.panel.classList.add("pinned");
+  setHover({ source: f.source, id: f.id });
+  shownRegion = null;   // redraw even if this hex is already shown
+  showRegion(f);
+}
 function onClick(e) {
   // click pins the panel (re-pins on another hex); hover keeps previewing until then.
   // On touch this is the only way to inspect; on desktop it holds a hex steady so
   // the chart tooltip and the H3 copy button are reachable without losing it.
+  flySeq++;   // a manual click outranks any pending fly-to selection
   const f = pickHex(e.point);
   if (f) {
-    pinned = true;
-    rp.panel.classList.add("pinned");
-    setHover({ source: f.source, id: f.id });
-    shownRegion = null;   // redraw even if this hex is already shown
-    showRegion(f);
+    pinTo(f);
   } else if (pinned) {
-    unpinRegion();
+    HOVER_DEV ? releasePin() : unpinRegion();
   }
 }
-function unpinRegion() {
+
+/* Fly-to / deep-link arrival: pin the target hex as if it were clicked —
+   matched by H3 id, never by whatever happens to cover the center point.
+   Fine-tier chunks can land after the first idle and each re-render fires
+   another one, so retry across a few. If the hex never turns up (no data
+   for that cell), the map just stays centered — no pin, nothing to dismiss. */
+let flySeq = 0;
+function selectOnArrival(lat, lng, id, tries) {
+  const seq = ++flySeq;
+  const attempt = left => {
+    if (seq !== flySeq) return;   // superseded by a newer fly or a user click
+    const f = map.queryRenderedFeatures(map.project([lng, lat]),
+                                        { layers: ["fine-fill", "r3-fill"] })
+                 .find(x => x.properties.id === id);
+    if (f) pinTo(f);
+    else if (left > 0) map.once("idle", () => attempt(left - 1));
+  };
+  map.once("idle", () => attempt(tries));
+}
+function flyToSelect(lat, lng, zoom, id) {
+  map.flyTo({ center: [lng, lat], zoom });
+  selectOnArrival(lat, lng, id, 4);
+}
+function unpinRegion() {   // touch: dismiss the panel entirely
   pinned = false;
   rp.panel.classList.remove("pinned");
   rp.panel.hidden = true;
   shownRegion = null;
   setHover(null);
+}
+function releasePin() {    // hover devices: resume following the cursor — no
+  pinned = false;          // hide, no flicker; content stays until hover moves it
+  rp.panel.classList.remove("pinned");
 }
 
 const rp = {
@@ -1136,6 +1188,7 @@ const rp = {
   note: document.getElementById("rp-note")
 };
 document.getElementById("rp-close").addEventListener("click", unpinRegion);
+document.getElementById("rp-pin").addEventListener("click", releasePin);
 rp.h3.addEventListener("click", () => {
   if (!shownRegion) return;
   const url = location.origin + location.pathname + "#" + activeLayer + "/" + shownRegion;
@@ -1422,13 +1475,12 @@ function drawCharts() {
 }
 
 /* --- Top regions (follows the viewport) ----------------------------------------------- */
-const flyMarker = new maplibregl.Marker({ color: "#4fd6c2", scale: 0.8 });
 function monthName(m) {
   const n = ["January","February","March","April","May","June","July",
              "August","September","October","November","December"];
   return n[+m.slice(5) - 1] + " " + m.slice(0, 4);
 }
-function topRow(i, cells, lat, lng, zoom) {
+function topRow(i, cells, lat, lng, zoom, id) {
   const tr = document.createElement("tr");
   const tds = cells.map(([cls, txt]) => {
     const td = document.createElement("td");
@@ -1439,10 +1491,7 @@ function topRow(i, cells, lat, lng, zoom) {
   const loc = document.createElement("button");
   loc.className = "loc"; loc.textContent = "→";
   loc.setAttribute("aria-label", "Fly to entry " + (i + 1));
-  loc.addEventListener("click", () => {
-    flyMarker.setLngLat([lng, lat]).addTo(map);
-    map.flyTo({ center: [lng, lat], zoom });
-  });
+  loc.addEventListener("click", () => flyToSelect(lat, lng, zoom, id));
   const tdLoc = document.createElement("td");
   tdLoc.appendChild(loc);
   tr.append(...tds, tdLoc);
@@ -1488,9 +1537,10 @@ function updateTopRegions() {
         for (let bit = 0; bit < 8; bit++) {
           if (!(v >> bit & 1)) continue;
           if (c.tc[li] > 1) {   // level 1 = credit 0; >1 = paid credit
-            const [la, lo] = h3.cellToLatLng(childId(parent, 6, by * 8 + bit));
+            const id = childId(parent, 6, by * 8 + bit);
+            const [la, lo] = h3.cellToLatLng(id);
             if (la >= s && la <= n && inLng(lo, w, e))
-              cand.push([dec.credit6(lev2t8(c.tc[li])), la, lo]);
+              cand.push([dec.credit6(lev2t8(c.tc[li])), la, lo, id]);
           }
           li++;
         }
@@ -1500,11 +1550,11 @@ function updateTopRegions() {
     title.textContent = "Top cells — in view";
     note.textContent = "% = the cell’s paid credit this month (undercut of " +
       "its own 5-year baseline × neighbourhood weight). Click → to fly.";
-    cand.slice(0, 10).forEach(([cr, la, lo], i) => {
+    cand.slice(0, 10).forEach(([cr, la, lo, id], i) => {
       tb.appendChild(topRow(i, [
         ["rk", String(i + 1)], ["", fmtCoord(la, lo)],
         ["cr", (cr * 100).toFixed(1) + "%"]
-      ], la, lo, 9.2));
+      ], la, lo, 9.2, id));
     });
     if (cand.length === 0) tb.appendChild(topEmpty("no credited cells in view"));
     return;
@@ -1535,7 +1585,7 @@ function updateTopRegions() {
       ["rk", String(i + 1)], ["", fmtCoord(r3Lat[j], r3Lng[j])],
       ["", R3.ncr[j] + "c"],
       ["cr", "Σ " + (cr >= 10 ? cr.toFixed(1) : cr.toFixed(2))]
-    ], r3Lat[j], r3Lng[j], 6.6));
+    ], r3Lat[j], r3Lng[j], HEX_ZOOM[3], idAt3(j)));
   });
   if (idxs.length === 0) tb.appendChild(topEmpty("no credited regions in view"));
 }
@@ -1581,7 +1631,7 @@ about.addEventListener("click", e => { if (e.target === about) about.hidden = tr
 window.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
   if (!about.hidden) about.hidden = true;
-  else if (pinned) unpinRegion();
+  else if (pinned) HOVER_DEV ? releasePin() : unpinRegion();
 });
 
 /* --- Init ------------------------------------------------------------------------------ */
