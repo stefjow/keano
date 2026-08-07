@@ -769,14 +769,35 @@ const LAYERS = [
   { key: "credit", prop: "tc", label: "Credit", title: "Credit" },
   { key: "m",      prop: "tm", label: "NO₂",    title: "NO₂ level (12-month mean)" }
 ];
-/* Hash routing: #<layer> or #<layer>/<h3-id> (deep link to a hex) */
+/* Hash routing: #<layer>, #<layer>/<h3-id> (deep link to a hex) or
+   #<layer>/@<lat>,<lng>,<zoom> (deep link to a view) */
 const HASH = location.hash.slice(1).split("/");
 let activeLayer = LAYERS.some(l => l.key === HASH[0]) ? HASH[0] : "trend";
 const startHex = HASH[1] && h3.isValidCell(HASH[1]) ? HASH[1] : null;
+const startView = (() => {
+  const m = HASH[1] && HASH[1].match(/^@(-?\d+\.?\d*),(-?\d+\.?\d*),(\d+\.?\d*)z?$/);
+  return m && Math.abs(+m[1]) <= 90 && Math.abs(+m[2]) <= 180
+    ? { lat: +m[1], lng: +m[2], zoom: +m[3] } : null;
+})();
 /* arrival zooms sit inside the tier that renders the hex's own res, so the
    arriving fly-to / deep link can select it (r3-fill ends at maxzoom Z4+0.4) */
 const HEX_ZOOM = { 3: 4.8, 4: 5.6, 5: 6.8, 6: 9.2 };
 const layerDef = key => LAYERS.find(l => l.key === key);
+
+/* Keep the address bar shareable: after any pan/zoom the hash carries the
+   view (layer switches refresh it too). replaceState, not location.hash —
+   no history entry per pan. A hex deep link stays in the bar until the map
+   actually moves; hex links themselves come from the ⬡ copy button. */
+let mapMoved = false;
+function writeHash() {
+  let tail = HASH[1] ? "/" + HASH[1] : "";
+  if (mapMoved) {
+    const c = map.getCenter();
+    tail = "/@" + c.lat.toFixed(3) + "," + (((c.lng + 540) % 360) - 180).toFixed(3) +
+           "," + map.getZoom().toFixed(2);
+  }
+  history.replaceState(null, "", "#" + activeLayer + tail);
+}
 
 function fillExpr(key) {
   const e = ["interpolate", ["linear"], ["get", layerDef(key).prop]];
@@ -909,6 +930,8 @@ const map = new maplibregl.Map({
   ...(startHex
     ? { center: h3.cellToLatLng(startHex).reverse(),
         zoom: HEX_ZOOM[h3.getResolution(startHex)] || 9.2 }
+    : startView
+    ? { center: [startView.lng, startView.lat], zoom: startView.zoom }
     : { center: [12, 30], zoom: 1.6 }),
   minZoom: 1, maxZoom: 13,
   attributionControl: false
@@ -1004,7 +1027,7 @@ function setupMap() {
     paint: { "raster-opacity": 0.9 }
   });
 
-  map.on("moveend", () => { updateFine(); updateTopRegions(); });
+  map.on("moveend", () => { mapMoved = true; writeHash(); updateFine(); updateTopRegions(); });
   map.on("mousemove", onHover);
   map.on("click", onClick);
   map.on("zoomend", () => { if (activeLayer === "credit") drawLegend(); });
@@ -1391,6 +1414,7 @@ LAYERS.forEach(l => {
     b.setAttribute("aria-pressed", "true");
     applyLayerPaint(l.key);
     drawLegend();
+    writeHash();
   });
   layerBtns.appendChild(b);
 });
