@@ -60,7 +60,7 @@ disables past months when zoomed in, or fine-tier history becomes a
 (much bigger) data problem for later.
 
 ### Surface the 3D extrusion mode
-Built and working, console-only since 1dbcb57. The `ctrl-3d` button CSS
+Built and working, console-only since 0f28330. The `ctrl-3d` button CSS
 already exists in the map control stack. Mostly a decision, not work:
 is it ready for the public?
 
@@ -80,8 +80,8 @@ session rather than a bullet here.
 ## Housekeeping
 
 ### Automate the monthly run
-`run_all.R` + deploy is manual. A cron/systemd timer (here or on
-explorer200) with the smoke test as deploy gate would close the loop.
+`run_all.R` + deploy is manual. A cron/systemd timer (here or on the
+deploy host) with the smoke test as deploy gate would close the loop.
 Notify on failure rather than on success.
 
 ## Decisions taken this session (context)
