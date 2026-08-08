@@ -154,6 +154,18 @@ errors — once with a hover-capable pointer and once as a touch device.
 Needs `npm install` (puppeteer-core) and a Chrome under `~/.cache/puppeteer`
 or `PUPPETEER_EXECUTABLE_PATH`; `SKIP_SMOKE=1` bypasses the deploy gate.
 
+Script 05 gates the *numbers* the way the smoke test gates the *map* — a
+wrong month renders into a perfectly working map, so passing one proves
+nothing about the other. A new month must clear bounds taken from the
+observed history (coverage against its own trailing-12-month median,
+eligible cells against the previous month, the level and one-month step of
+mean `perf_short`), set roughly 3× outside anything seen in 98 months so an
+unusual month passes and a broken one does not. The same check re-verifies
+rule 2 above: every closed month must come back unchanged from the
+recompute. On failure nothing is written, the previous rankings stand, the
+rejected summary lands in `tmp/monthly_summary_rejected.csv`, and
+`KEANO_SANITY_ACK=1` accepts it. Thresholds are in `config/config.R`.
+
 ## Planned: daily nowcast layer
 
 The scored history is monthly by design (the monthly L3 product is the sole

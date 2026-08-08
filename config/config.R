@@ -50,6 +50,15 @@ BASELINE_EXCLUDE_MONTHS = 12    # ...excluding the freshest year, so the baselin
 CREDIT_MARGIN           = 0.02  # relative undercut must exceed this noise gate
 NO2_FLOOR               = 30    # µmol/m²; cells with m below are not eligible
 
+# --- Sanity gate (script 05) --------------------------------------------------
+# A new month must clear these before anything is built or published. Set from
+# the observed history, not guessed — see sanity_findings() in _share.r for the
+# measured ranges each one sits outside.
+SANITY_COVERAGE_TOL = 0.15  # |n_cells_obs / trailing-12-month median - 1|
+SANITY_ELIGIBLE_TOL = 0.15  # |n_eligible / previous month - 1|
+SANITY_PERF_ABS     = 0.25  # |mean perf_short| among eligible cells
+SANITY_PERF_STEP    = 0.15  # |month-over-month change| in that mean
+
 # --- Derived views ------------------------------------------------------------
 TOP_N = 100  # rows in the monthly top-credit ranking
 

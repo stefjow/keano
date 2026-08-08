@@ -71,7 +71,42 @@ monthly = rbindlist(sum_list)[, .(
   mean_perf_short_eligible = sum(sum_perf_short) / pmax(sum(n_perf_short), 1)
 ), by = month][order(month)]
 
-fwrite(monthly, file.path(DATA_RANKINGS, "monthly_summary.csv"))
+# --- Sanity gate --------------------------------------------------------------
+# The smoke test proves the map works; nothing proved the numbers in it were
+# sane. A month that is the current upstream vintage can still be wrong —
+# half the globe missing, a scale error, a corrupted tile — and it would
+# render into a perfectly functional map. Checked before anything is written,
+# so a rejected month leaves the previous rankings in place; the candidate
+# lands in TMP_DIR to be looked at. KEANO_SANITY_ACK=1 accepts and continues.
+summary_file = file.path(DATA_RANKINGS, "monthly_summary.csv")
+previous = if (file.exists(summary_file))
+  fread(summary_file, data.table = FALSE) else NULL
+
+findings = sanity_findings(monthly, previous,
+                           coverage_tol = SANITY_COVERAGE_TOL,
+                           eligible_tol = SANITY_ELIGIBLE_TOL,
+                           perf_abs     = SANITY_PERF_ABS,
+                           perf_step    = SANITY_PERF_STEP)
+
+if (length(findings)) {
+  candidate = file.path(TMP_DIR, "monthly_summary_rejected.csv")
+  fwrite(monthly, candidate)
+  bar = strrep("=", 74)
+  message("\n", bar)
+  message("SANITY GATE — the recomputed summary does not look right:")
+  for (f in findings) message("  * ", f)
+  message(bar)
+  message("Nothing was written to ", DATA_RANKINGS, "; the previous rankings\n",
+          "still stand. The rejected summary is at ", candidate, ".\n",
+          "KEANO_SANITY_ACK=1 accepts it and continues this run.")
+  if (!nzchar(Sys.getenv("KEANO_SANITY_ACK")))
+    stop("Sanity gate failed: ", length(findings), " finding(s).")
+} else {
+  message("Sanity gate: ", nrow(monthly), " months clean (newest ",
+          monthly[.N, month], ").")
+}
+
+fwrite(monthly, summary_file)
 
 # --- Record events and monthly top credits ------------------------------------
 records = rbindlist(rec_list)
