@@ -27,7 +27,7 @@ incentive-driven system. Successor to the city-based
 ### History consistency (append-only contract)
 
 Every score for month *t* uses only data up to *t*. New months **append**
-rows; closed months never change. Two rules keep that true:
+rows; closed months never change. Three rules keep that true:
 
 1. `data/raw/` is an **append-only archive** — the download script only
    requests months newer than the newest archived file and never overwrites.
@@ -35,6 +35,20 @@ rows; closed months never change. Two rules keep that true:
    vintage.
 2. All metric definitions are causal, so recomputing the full history from
    the archive reproduces identical past values.
+3. Script 01 records each archived file's upstream vintage in `vintage.csv`
+   beside the archive — `processing:version`, the item's `created` and
+   `updated`, and the asset's declared size — and re-checks it every run.
+   Rule 1 keeps the right bytes but would never *tell* anyone upstream had
+   moved, and Terrascope does reprocess: one campaign shifted `updated` and
+   left `created` alone, another deleted and recreated the items so both
+   moved. Recorded rows are never rewritten, so drift stays visible until
+   someone re-vintages on purpose. On a mismatch the run **stops with a
+   non-zero exit** — the archive stays authoritative and is never
+   redownloaded, but choosing between keeping the old vintage and rebasing
+   the history is a decision for a person, not for a timer. The same
+   manifest catches a truncated or corrupted archive file, by checking the
+   recorded size against the bytes on disk. `KEANO_VINTAGE_ACK=1`
+   acknowledges and continues.
 
 ## Pipeline
 
