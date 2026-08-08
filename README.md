@@ -68,6 +68,35 @@ configured), plus CRAN packages `terra`, `data.table` (≥ 1.16 for
 Storage: ~22 GB raw GeoTIFFs (95+ months, ~222 MB NO2 + ~9 MB weight each),
 a few GB parquet.
 
+### Configuration outside the repo
+
+Credentials and the paths that name infrastructure are kept out of version
+control. R reads `.Renviron` in the repo root (gitignored) at startup:
+
+```
+TERRASCOPE_USER=...       # Terrascope account, used by terrascoper (script 01)
+TERRASCOPE_PASS=...
+KEANO_DATA_RAW=...        # append-only GeoTIFF archive       (scripts 01-03)
+KEANO_PUBLISH_DIR=...     # published derived views           (script 07)
+```
+
+`config/config.R` binds the two paths lazily, so a missing one is an error
+only in the scripts that actually touch it — 04, 05 and 06 (metrics,
+rankings, map) run with neither set.
+
+`scripts/08_deploy.sh` takes its rsync destination from a gitignored
+`.deploy.env` in the repo root (or from the environment, or as positional
+arguments):
+
+```
+DEPLOY_TARGET=user@host:/path
+DEPLOY_PORT=22
+```
+
+Each machine carries its own copy of both files. Neither is in any
+repository, so back them up somewhere durable — a lost clone takes the only
+copy of these values with it.
+
 ## Tuning knobs
 
 All in `config/config.R`: `H3_RESOLUTION`, `WINDOW_MONTHS`,
@@ -91,9 +120,12 @@ current viewport only. One template, two builds:
   files fetched on demand (res-3 core ~1.4 MB up front; monthly series,
   res-4/5 tiers lazily; res-6 planes chunked by res-1 parent, ~50 KB per
   chunk, viewport-driven). Every `.bin` has a precompressed `.gz` sibling
-  for `gzip_static`; `data/<month>/` paths are immutable, so far-future
-  cache headers apply. Deploy with `scripts/08_deploy.sh user@host:/path`
-  (nginx snippet inside).
+  the host serves directly (`gzip_static` on nginx, `precompressed gzip` on
+  Caddy); `data/<month>/` paths are immutable, so far-future cache headers
+  apply, while `index.html` stays `no-cache`. The per-hex series files
+  (`s4/s5/s6.bin`) are read with HTTP range requests, so the host has to
+  answer 206. Deploy with `scripts/08_deploy.sh` (config for both servers
+  in its header; the reference deployment runs Caddy).
 
 Both `run_all.R` and the deploy script gate on `scripts/09_smoketest.js`: it
 serves `data/viz/web/` locally and drives it in headless Chrome — hover /

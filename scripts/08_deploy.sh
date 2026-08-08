@@ -2,15 +2,35 @@
 # ============================================================================
 # Step 8 (optional): Deploy the web bundle to the public host
 # ============================================================================
-# Rsyncs data/viz/web/ to DEPLOY_TARGET. data/<month>/ directories are
-# immutable (new month = new directory), so --delete only ever removes
-# months you decided to drop, and index.html is replaced atomically last.
+# Rsyncs data/viz/web/ to DEPLOY_TARGET, data first and index.html last, so
+# a new month is complete on the host before anything points at it.
+#
+# data/<month>/ is immutable (new month = new directory) and no --delete is
+# passed, so past months stay on the host after index.html moves on. Nothing
+# links to them once the shell points at the newer month — pruning is a
+# manual decision for now (~2.8 GB per month).
 #
 # Usage:  scripts/08_deploy.sh user@host:/path [ssh-port]
 #         (or set DEPLOY_TARGET / DEPLOY_PORT — via the environment or a
 #         gitignored .deploy.env in the repo root; port defaults to 22)
 #
-# nginx for the target directory:
+# The host must serve the .gz siblings in place of the .bin files, answer
+# range requests (the per-hex series files are read with Range: bytes=),
+# cache data/ far-future and index.html not at all.
+#
+# Caddy — what the reference deployment runs:
+#
+#   :PORT {
+#     root * /path/to/target
+#     header /data/* Cache-Control "public, max-age=31536000, immutable"
+#     @entry path / /index.html
+#     header @entry Cache-Control "no-cache"
+#     file_server {
+#       precompressed gzip                 # serves the .gz siblings
+#     }
+#   }
+#
+# nginx, equivalently:
 #
 #   location /no2/ {
 #     root /var/www;                       # -> /var/www/no2/...

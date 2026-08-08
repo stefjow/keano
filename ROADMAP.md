@@ -97,5 +97,11 @@ Notify on failure rather than on success.
   retrying across map `idle` events; silent-center if the hex never
   renders. Arrival zooms (`HEX_ZOOM`) must stay inside the tier that
   renders the hex's own resolution — `r3-fill` stops at `Z4 + 0.4`.
-* Pushing `main` updates both remotes (origin has two push URLs:
-  Gitea = source of truth, GitHub mirror).
+* Pushing `main` updates both remotes (origin has two push URLs). As of
+  2026-08-08 the public GitHub repo is the source of truth and Gitea was
+  force-synced to match it — the two lines had diverged, and only the
+  GitHub one had the paths and hostnames moved out of the repo. Fetches
+  still come from Gitea, so `origin` is the one that can go stale.
+* Real paths, hosts and credentials live only in gitignored `.Renviron`
+  and `.deploy.env`, never in either repo (see README, "Configuration
+  outside the repo"). Both files exist per machine and nowhere else.
