@@ -1,9 +1,54 @@
 # Roadmap notes
 
-Ideas collected 2026-08-07, after the ECharts / selection-model session.
+Ideas collected 2026-08-07 after the ECharts / selection-model session,
+extended 2026-08-08 by the provenance / hardening session.
 Rough order inside each section is by value-for-effort, not commitment.
 
-## Quick wins
+## Shipped 2026-08-08
+
+### Source of truth moved to GitHub
+The two remotes had diverged: the same 23 commits with different SHAs,
+GitHub's copies scrubbed of internal paths, plus three commits only GitHub
+had — the env-var externalization and the top-regions scope. Local reset to
+`github/main`, Gitea force-synced to match. Nothing was lost: identical file
+lists, no tags, no other branches, and the only content unique to the Gitea
+line was the real paths, which now live outside the repo.
+
+### Out-of-repo config and hosting documented
+A fresh clone of the public repo used to hit `KEANO_DATA_RAW is not set`
+with nothing in the README to explain it. Scripts 01–03 need
+`KEANO_DATA_RAW`, 07 needs `KEANO_PUBLISH_DIR`, 04–06 need neither. The
+deploy header documented nginx while the reference host actually runs Caddy;
+both configs are given now.
+
+### Month bundle retention
+`index.html` points at one month, so older `data/<month>/` directories were
+dead weight growing ~2.8 GB a month on both sides. About 96% of a bundle is
+the per-hex series, which every build reships complete for all months, so an
+old bundle duplicates the newest one; the remaining ~108 MB rebuilds from
+the panel. Script 06 keeps `VIZ_KEEP_MONTHS` locally, `08_deploy.sh` keeps
+`KEEP_MONTHS` on the host and only after both rsyncs succeed. Default 2 —
+the second month is the rollback.
+
+### Vintage check
+Append-only guaranteed we never overwrite, not that anyone would notice
+Terrascope revising a month we had already scored. Script 01 records
+`processing:version`, the item's `created`/`updated` and the asset's
+`file:size` in `vintage.csv` beside the archive and re-checks every run.
+Both observed reprocessing shapes are covered: 2025-10…12 moved `updated`
+only, 2026-01…04 were recreated so `created` moved too. Bootstrapped from
+verified state — all 196 archived files matched upstream.
+
+### Sanity gate on the numbers
+The smoke test proves the map works, and a wrong month renders into a
+working map. Script 05 checks a new month against bounds taken from 98
+months of history (coverage against its own trailing-12-month median,
+eligible cells against the previous month, `perf_short` level and step),
+each roughly 3× outside anything observed. The same pass verifies the
+append-only contract's rule 2 — closed months must survive a recompute —
+which nothing checked before. It holds: all 98 reproduced byte for byte.
+
+## Shipped 2026-08-07
 
 ### Favicon — done 2026-08-07
 The live site 404s on `/favicon.ico` on every load. Add one (the ⬡ mark
@@ -58,6 +103,10 @@ COVID drop sweeping the globe. Scope cut for v1: res-3 only — the fine
 tiers (4/5/6) only ship current-month planes, so either the slider
 disables past months when zoomed in, or fine-tier history becomes a
 (much bigger) data problem for later.
+*Cheaper than it looks: measuring bundles for the retention work established
+that `series.bin` ships the complete res-3 monthly history with every build,
+so a res-3 scrubber needs no old month directories and no pipeline work at
+all — it is front-end work against data the browser already holds.*
 
 ### Surface the 3D extrusion mode
 Built and working, console-only since 0f28330. The `ctrl-3d` button CSS
@@ -80,12 +129,43 @@ session rather than a bullet here.
 ## Housekeeping
 
 ### Automate the monthly run
-`run_all.R` + deploy is manual. A cron/systemd timer (here or on the
-deploy host) with the smoke test as deploy gate would close the loop.
-Notify on failure rather than on success.
+Still manual, but the blockers are gone. Three gates now halt rather than
+publish through a problem — vintage on the inputs (01), sanity on the
+numbers (05), smoke on the bundle (09) — and the publication lag is a steady
+13 days after month end (2025-10, 2026-05 and 2026-06 all landed on the
+13th), so a timer on the 14th or 15th is comfortably clear of it.
 
-## Decisions taken this session (context)
+Two things to settle. It has to run **here**: this machine holds the panel,
+metrics and archive, while the deploy host only ever receives the finished
+bundle. And the non-zero exits need somewhere to go — a gate nobody hears is
+the same as no gate, so notification is part of this item rather than a
+follow-on. Budget the run realistically: appending a month rewrites the
+per-cell stride in the series files, so every deploy transfers ~2.7 GB no
+matter what rsync's delta algorithm does.
 
+### Smoke coverage for the top-regions scope
+`09_smoketest.js` asserts hover, pinning, deep links and chart instances,
+but nothing about the trailing-12-months / all-time scope from e3e2453 —
+the most recent UI change is the one with no assertion, and it is already
+live. Worth closing before the next change layers on top of it.
+
+## Decisions taken (context)
+
+* Gates halt, they do not merely warn. The vintage check (01) and the sanity
+  gate (05) both `stop()`, so `run_all.R` exits non-zero and nothing
+  downstream publishes; `KEANO_VINTAGE_ACK=1` and `KEANO_SANITY_ACK=1`
+  acknowledge. Deliberate — keeping an old vintage or rebasing the history
+  is a decision for a person, not for a timer.
+* Sanity thresholds are measured, not guessed; `sanity_findings()` in
+  `_share.r` records the observed range each bound sits outside. Records and
+  total credit trend far too hard to bound at all (both roughly tripled
+  during 2026) and are only checked for being present.
+* A reprocessed month is never redownloaded. The archived vintage stays
+  authoritative by contract; the check exists to make drift visible, not to
+  resolve it.
+* `data/raw_cache` is pure staging — script 03 stages only months missing
+  from the panel, so it is safe to delete and costs ~230 MB to refill per
+  month. Cleared 2026-08-08, reclaiming 27 GB.
 * Charts are Apache ECharts 6.1.0 from unpkg; piecewise `visualMap` is
   broken there — the diverging fill uses two silent zero-clamped series
   instead. Don't "simplify" it back.
