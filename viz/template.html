@@ -280,6 +280,8 @@
   }
   .chart-block .chart { height: 74px; }
 
+  .top-block .layers.scope { margin: 8px 0 4px; }
+  .top-block .layers.scope button { padding: 4px 2px; font-size: 11.5px; }
   .top-block table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .top-block td {
     padding: 4px 2px;
@@ -444,6 +446,7 @@
           </div>
           <div class="top-block">
             <h3 id="top-title">Top regions</h3>
+            <div class="layers scope" role="group" aria-label="Credit window" id="scope-buttons"></div>
             <table id="top-table"></table>
             <p class="note" id="top-note"></p>
           </div>
@@ -557,7 +560,7 @@ const lev2t8 = lev => lev === 0 ? -1 : (lev - 1) / 254;     // -1 = no data
 const lev2t16 = lev => lev === 0 ? -1 : (lev - 1) / 65533;
 
 /* Decoded globals */
-let R3 = null;     // { ids, tm, ty, tt, tc, series|null, credit, ncr }
+let R3 = null;     // { ids, tm, ty, tt, tc, series|null, credit/ncr (+12/All) }
 const TIERS = {};  // res -> { B, chunks: [chunk]|null, file? (lazy), pending? }
 const r3Index = new Map();
 let r3Lat = null, r3Lng = null;
@@ -604,6 +607,10 @@ function wholeTierChunk(T, r, sec) {
 function finishR3(sec) {
   R3.credit = sec.f32("cr3f");      // exact regional credit sums
   R3.ncr = sec.u16raw("nc3");       // credited cells per region
+  R3.credit12 = sec.f32("cr3y");    // window sums for the scope toggle;
+  R3.ncr12 = sec.u16raw("nc3y");    // counts = distinct credited cells
+  R3.creditAll = sec.f32("cr3a");
+  R3.ncrAll = sec.u16raw("nc3a");
   r3Lat = new Float64Array(NP);
   r3Lng = new Float64Array(NP);
   for (let j = 0; j < NP; j++) {
@@ -1418,6 +1425,28 @@ LAYERS.forEach(l => {
   });
   layerBtns.appendChild(b);
 });
+
+/* --- Top-list scope toggle (latest month / trailing 12 / all time) -------------- */
+let topScope = "month";
+const scopeBtns = document.getElementById("scope-buttons");
+[
+  { key: "month", label: monthName(META.month), title: "Paid credit in the latest month" },
+  { key: "12m", label: "12 months", title: "Paid credit summed over the trailing 12 months" },
+  { key: "all", label: "All time", title: "Paid credit summed over the full record" }
+].forEach(sc => {
+  const b = document.createElement("button");
+  b.textContent = sc.label;
+  b.title = sc.title;
+  b.setAttribute("aria-pressed", String(sc.key === topScope));
+  b.addEventListener("click", () => {
+    topScope = sc.key;
+    scopeBtns.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", "false"));
+    b.setAttribute("aria-pressed", "true");
+    updateTopRegions();
+  });
+  scopeBtns.appendChild(b);
+});
+
 function hex2rgb(h) { return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); }
 function drawLegend() {
   const cv = document.getElementById("legend-bar"), c = cv.getContext("2d");
@@ -1538,6 +1567,7 @@ const inLng = (lo, w, e) =>
   (lo - 360 >= w && lo - 360 <= e);
 
 function updateTopRegions() {
+  if (!R3) return;   // scope toggle clicked before the core data arrived
   const b = map.getBounds();
   const w = b.getWest(), e = b.getEast();
   const s = b.getSouth(), n = b.getNorth();
@@ -1546,7 +1576,9 @@ function updateTopRegions() {
   const note = document.getElementById("top-note");
   tb.textContent = "";
 
-  if (displayRes() === 6) {
+  /* per-cell credit history isn't shipped, so the windowed scopes stay
+     regional at every zoom; only the month scope switches to cells */
+  if (topScope === "month" && displayRes() === 6) {
     /* --- individual cells in view (res-6 tier active) --------------------- */
     /* loaded chunks only — updateFine is already fetching the missing ones */
     const T = TIERS[6], PAD = 1.0;
@@ -1590,11 +1622,14 @@ function updateTopRegions() {
   }
 
   /* --- res-3 regions intersecting the view (padded by a circumradius) ------- */
+  const [crArr, ncArr] = topScope === "12m" ? [R3.credit12, R3.ncr12]
+                       : topScope === "all" ? [R3.creditAll, R3.ncrAll]
+                       : [R3.credit, R3.ncr];
   const global = e - w >= 360 && s <= -60 && n >= 75;
   const PAD = 0.8;
   const idxs = [];
   for (let j = 0; j < NP; j++) {
-    if (R3.credit[j] <= 0) continue;
+    if (crArr[j] <= 0) continue;
     if (!global) {
       const la = r3Lat[j];
       if (la < s - PAD || la > n + PAD) continue;
@@ -1603,16 +1638,27 @@ function updateTopRegions() {
     }
     idxs.push(j);
   }
-  idxs.sort((a, z) => R3.credit[z] - R3.credit[a]);
-  title.textContent = "Top regions — " + (global ? monthName(META.month) : "in view");
+  idxs.sort((a, z) => crArr[z] - crArr[a]);
+  const ms = META.months;
+  const winLabel = monthName(ms[Math.max(0, ms.length - 12)]) +
+    " – " + monthName(META.month);
+  const scopeName = topScope === "12m" ? "last 12 months"
+                  : topScope === "all" ? "all time" : monthName(META.month);
+  title.textContent = "Top regions — " + (global ? scopeName : "in view");
   note.textContent = "Σ = paid credit summed over the res-6 cells of a " +
-    "~12,400 km² region this month, with the number of credited cells. " +
-    "Zoom in for individual cells. Click → to fly.";
+    "~12,400 km² region " + (
+      topScope === "12m" ? "over the last 12 months (" + winLabel + "), " +
+        "with the number of distinct credited cells. "
+      : topScope === "all" ? "over the full record (since " + monthName(ms[0]) +
+        "), with the number of distinct credited cells. "
+      : "this month, with the number of credited cells. " +
+        "Zoom in for individual cells. ") +
+    "Click → to fly.";
   idxs.slice(0, 10).forEach((j, i) => {
-    const cr = R3.credit[j];
+    const cr = crArr[j];
     tb.appendChild(topRow(i, [
       ["rk", String(i + 1)], ["", fmtCoord(r3Lat[j], r3Lng[j])],
-      ["", R3.ncr[j] + "c"],
+      ["", ncArr[j] + "c"],
       ["cr", "Σ " + (cr >= 10 ? cr.toFixed(1) : cr.toFixed(2))]
     ], r3Lat[j], r3Lng[j], HEX_ZOOM[3], idAt3(j)));
   });

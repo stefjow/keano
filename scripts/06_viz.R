@@ -27,6 +27,7 @@ ensure_dir(DATA_VIZ)
 months_all = months_in_dataset(DATA_PANEL)
 latest = max(months_all)
 nm = length(months_all)
+win12 = tail(months_all, 12L)   # trailing-12 window for the top-list scope toggle
 message("Rendering hexagon map for ", latest, " (", nm, " months of history)")
 
 # --- H3 id arithmetic on the 15-char hex strings ------------------------------
@@ -84,12 +85,21 @@ do_shard = function(s) {
   ce[, `:=`(r3 = parent_r3(h3), path = path_r6(h3), h3 = NULL)]
 
   hist = open_dataset(DATA_METRICS) |>
-    filter(shard == s) |> select(cell_id, month, m) |> collect() |>
+    filter(shard == s) |> select(cell_id, month, m, credit) |> collect() |>
     as.data.table()
   if (nrow(hist) == 0) return(NULL)
   hist[ce, r3 := i.r3, on = "cell_id"]
   ser = hist[is.finite(m), .(sum_m = sum(m), n_m = .N), by = .(r3, month)]
-  rm(hist)
+  # paid credit summed over the trailing-12 / all-time windows, with the
+  # number of distinct cells that earned in each window
+  paid = hist[!is.na(credit) & credit > 0]
+  crwin = paid[, .(
+    credit_y = sum(credit[month %in% win12]),
+    n_cr_y   = uniqueN(cell_id[month %in% win12]),
+    credit_a = sum(credit),
+    n_cr_a   = uniqueN(cell_id)
+  ), by = r3]
+  rm(hist, paid)
 
   last = open_dataset(DATA_METRICS) |>
     filter(shard == s, month == latest) |>
@@ -113,12 +123,12 @@ do_shard = function(s) {
 
   fine = last[is.finite(m),
               .(r3, path, m, perf_short, perf_long, credit, elig)]
-  list(ser = ser, r3last = r3last, fine = fine)
+  list(ser = ser, r3last = r3last, fine = fine, crwin = crwin)
 }
 
 # PSOCK, not fork (see script 03): arrow used pre-fork deadlocks in children
 cl = makeCluster(max(1L, min(N_WORKERS, length(shards))), outfile = "")
-clusterExport(cl, c("do_shard", "latest", "parent_r3", "path_r6",
+clusterExport(cl, c("do_shard", "latest", "win12", "parent_r3", "path_r6",
                     "DATA_METRICS", "DATA_LOOKUP"))
 invisible(clusterEvalQ(cl, suppressMessages({
   library(data.table); library(arrow); library(dplyr)
@@ -135,6 +145,7 @@ res = res[!vapply(res, is.null, TRUE)]
 ser    = rbindlist(lapply(res, `[[`, "ser"))
 r3last = rbindlist(lapply(res, `[[`, "r3last"))
 fine   = rbindlist(lapply(res, `[[`, "fine"))
+crwin  = rbindlist(lapply(res, `[[`, "crwin"))
 rm(res)
 
 # --- res-3 alignment + res-4/5 aggregates -------------------------------------
@@ -143,6 +154,7 @@ rm(res)
 r3_ids = sort(unique(c(r3last$r3, ser$r3)))
 nP = length(r3_ids)
 r3last = r3last[data.table(r3 = r3_ids), on = "r3"]
+crwin  = crwin[data.table(r3 = r3_ids), on = "r3"]
 
 fine[, r3i := chmatch(r3, r3_ids)]
 stopifnot(!anyNA(fine$r3i))
@@ -251,6 +263,14 @@ add_sec("r3series", delta_u16_raw(lev_u16(t_ser)))
 add_sec("cr3f", raw_bin(as.numeric(fifelse(is.na(r3last$credit), 0,
                                            r3last$credit)), 4L))
 add_sec("nc3", raw_bin(fifelse(is.na(r3last$n_cr), 0L, r3last$n_cr), 2L))
+# same, summed over the trailing-12 / all-time windows (scope toggle);
+# counts are distinct cells credited within the window
+add_sec("cr3y", raw_bin(as.numeric(fifelse(is.na(crwin$credit_y), 0,
+                                           crwin$credit_y)), 4L))
+add_sec("nc3y", raw_bin(fifelse(is.na(crwin$n_cr_y), 0L, crwin$n_cr_y), 2L))
+add_sec("cr3a", raw_bin(as.numeric(fifelse(is.na(crwin$credit_a), 0,
+                                           crwin$credit_a)), 4L))
+add_sec("nc3a", raw_bin(fifelse(is.na(crwin$n_cr_a), 0L, crwin$n_cr_a), 2L))
 
 tier_sec = function(r, tt, key, B, crmax) {
   add_sec(paste0("bm", r), bitmap_raw(tt$r3i, key, B))
@@ -348,7 +368,8 @@ concat_file = function(names) {
   }
   list(bin = do.call(c, unname(sections[names])), manifest = man)
 }
-core = concat_file(c("r3ids", "tm3", "ty3", "tt3", "tc3", "cr3f", "nc3"))
+core = concat_file(c("r3ids", "tm3", "ty3", "tt3", "tc3", "cr3f", "nc3",
+                     "cr3y", "nc3y", "cr3a", "nc3a"))
 t4f  = concat_file(c("bm4", "tm4", "ty4", "tt4", "tc4"))
 t5f  = concat_file(c("bm5", "tm5", "ty5", "tt5", "tc5"))
 write_bin_gz(core$bin, file.path(wdata, "core.bin"))
