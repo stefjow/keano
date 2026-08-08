@@ -516,6 +516,22 @@ meta_web$web = list(
   r6 = chunks_meta
 )
 splice(meta_web, "", file.path(WEB_DIR, "index.html"))
+
+# --- Retention: keep only the newest VIZ_KEEP_MONTHS bundles ------------------
+# index.html points at one month; older bundles are unreferenced duplicates
+# (see VIZ_KEEP_MONTHS in config). Never touches the month just built.
+if (VIZ_KEEP_MONTHS > 0L) {
+  wroot = file.path(WEB_DIR, "data")
+  have = list.dirs(wroot, full.names = FALSE, recursive = FALSE)
+  have = sort(have[grepl("^\\d{4}-\\d{2}$", have)], decreasing = TRUE)
+  if (length(have) > VIZ_KEEP_MONTHS) {
+    for (d in setdiff(have[-seq_len(VIZ_KEEP_MONTHS)], latest)) {
+      message("Retention: dropping local bundle ", d)
+      unlink(file.path(wroot, d), recursive = TRUE)
+    }
+  }
+}
+
 web_files = list.files(wdata, full.names = TRUE)
 message("Web bundle: ", WEB_DIR, " (", length(web_files) + 1L, " files; ",
         round(sum(file.size(web_files[!grepl("\\.gz$", web_files)])) / 2^20, 1),

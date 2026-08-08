@@ -91,6 +91,7 @@ arguments):
 ```
 DEPLOY_TARGET=user@host:/path
 DEPLOY_PORT=22
+KEEP_MONTHS=2             # month directories to keep on the host (0 = never prune)
 ```
 
 Each machine carries its own copy of both files. Neither is in any
@@ -125,7 +126,12 @@ current viewport only. One template, two builds:
   apply, while `index.html` stays `no-cache`. The per-hex series files
   (`s4/s5/s6.bin`) are read with HTTP range requests, so the host has to
   answer 206. Deploy with `scripts/08_deploy.sh` (config for both servers
-  in its header; the reference deployment runs Caddy).
+  in its header; the reference deployment runs Caddy). Only the newest month
+  is ever referenced, so build and deploy each keep the newest few bundles
+  (`VIZ_KEEP_MONTHS` / `KEEP_MONTHS`, default 2 — the second for rollback)
+  and drop the rest: ~96% of a bundle is the per-hex series that every build
+  reships for the full history, and the remaining ~108 MB of month-specific
+  planes rebuilds from the panel.
 
 Both `run_all.R` and the deploy script gate on `scripts/09_smoketest.js`: it
 serves `data/viz/web/` locally and drives it in headless Chrome — hover /

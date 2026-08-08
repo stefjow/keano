@@ -5,14 +5,18 @@
 # Rsyncs data/viz/web/ to DEPLOY_TARGET, data first and index.html last, so
 # a new month is complete on the host before anything points at it.
 #
-# data/<month>/ is immutable (new month = new directory) and no --delete is
-# passed, so past months stay on the host after index.html moves on. Nothing
-# links to them once the shell points at the newer month — pruning is a
-# manual decision for now (~2.8 GB per month).
+# data/<month>/ is immutable (new month = new directory), so no --delete is
+# passed and a month is never rewritten in place. Instead, after a successful
+# deploy the newest KEEP_MONTHS month directories are kept and the rest are
+# removed: ~96% of a bundle is the per-hex series, which every build ships
+# complete for the full history, so an older month duplicates what the current
+# one already carries. KEEP_MONTHS=2 (default) leaves the previous month for a
+# rollback; 0 disables pruning and lets months accumulate at ~2.8 GB each.
 #
 # Usage:  scripts/08_deploy.sh user@host:/path [ssh-port]
-#         (or set DEPLOY_TARGET / DEPLOY_PORT — via the environment or a
-#         gitignored .deploy.env in the repo root; port defaults to 22)
+#         (or set DEPLOY_TARGET / DEPLOY_PORT / KEEP_MONTHS — via the
+#         environment or a gitignored .deploy.env in the repo root;
+#         port defaults to 22)
 #
 # The host must serve the .gz siblings in place of the .bin files, answer
 # range requests (the per-hex series files are read with Range: bytes=),
@@ -72,3 +76,24 @@ fi
 rsync -av -e "ssh -p $PORT" --exclude index.html "$SRC" "$TARGET/"
 rsync -av -e "ssh -p $PORT" "$SRC/index.html" "$TARGET/index.html"
 echo "Deployed to $TARGET"
+
+# --- Retention: drop month directories the shell no longer points at ---------
+# Runs only after both rsyncs succeeded, so a failed deploy never prunes. The
+# month just deployed is excluded explicitly, on top of being newest.
+KEEP_MONTHS="${KEEP_MONTHS:-2}"
+CURRENT="$(basename "$(ls -1d "$SRC"data/*/ | sort | tail -1)")"
+
+if [[ "$KEEP_MONTHS" -gt 0 && "$TARGET" == *:* ]]; then
+  ssh -p "$PORT" "${TARGET%%:*}" bash -s -- "${TARGET#*:}" "$KEEP_MONTHS" "$CURRENT" <<'REMOTE'
+root=$1; keep=$2; current=$3
+cd "$root/data" 2>/dev/null || exit 0
+stale=$(ls -1d 20[0-9][0-9]-[01][0-9] 2>/dev/null | sort -r | tail -n +$((keep + 1)))
+[ -z "$stale" ] && exit 0
+printf '%s\n' "$stale" | while IFS= read -r d; do
+  [ "$d" = "$current" ] && continue
+  [ -d "$d" ] || continue
+  printf 'retention: removing %s (%s)\n' "$d" "$(du -sh "$d" | cut -f1)"
+  rm -rf -- "$d"
+done
+REMOTE
+fi

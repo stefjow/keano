@@ -52,3 +52,11 @@ NO2_FLOOR               = 30    # µmol/m²; cells with m below are not eligible
 
 # --- Derived views ------------------------------------------------------------
 TOP_N = 100  # rows in the monthly top-credit ranking
+
+# Month bundles under data/viz/web/data/ to keep (script 06, and the same
+# default for the deploy host via KEEP_MONTHS). A bundle is ~2.8 GB and ~96%
+# of it is the per-hex series, which every build regenerates for the full
+# history — an older bundle duplicates what the newest one already carries,
+# and its month-specific planes rebuild from the panel. 2 keeps the previous
+# month around for a rollback; 0 disables pruning.
+VIZ_KEEP_MONTHS = 2
