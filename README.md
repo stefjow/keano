@@ -148,9 +148,11 @@ current viewport only. One template, two builds:
   planes rebuilds from the panel.
 
 Both `run_all.R` and the deploy script gate on `scripts/09_smoketest.js`: it
-serves `data/viz/web/` locally and drives it in headless Chrome — hover /
-pin / release, hex and viewport deep links, chart instances, zero page
-errors — once with a hover-capable pointer and once as a touch device.
+serves `data/viz/web/` locally (`KEANO_WEB_DIR` overrides the bundle path)
+and drives it in headless Chrome — hover / pin / release, hex and viewport
+deep links, chart instances, the per-hex trend line joining the region line
+at fine zoom, zero page errors — once with a hover-capable pointer and once
+as a touch device.
 Needs `npm install` (puppeteer-core) and a Chrome under `~/.cache/puppeteer`
 or `PUPPETEER_EXECUTABLE_PATH`; `SKIP_SMOKE=1` bypasses the deploy gate.
 

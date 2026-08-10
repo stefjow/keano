@@ -698,7 +698,7 @@ let pendingChart = null;
 function loadSeries() {
   fetchBytes(WEB.files.series.name).then(bytes => {
     R3.series = undelta16(new Uint16Array(bytes.buffer));
-    if (pendingChart) drawRegionChart(pendingChart.r3i, pendingChart.cellNow);
+    if (pendingChart) drawRegionChart(pendingChart.r3i, pendingChart.cellNow, pendingChart.ser);
   }).catch(console.error);
 }
 
@@ -1265,22 +1265,27 @@ function showRegion(f) {
   rp.panel.hidden = false;   // before the chart draws: ECharts measures its container
   const r3i = r3Index.get(res === 3 ? P.id : parentR3(P.id));
   const cellNow = res > 3 && P.tm >= 0 ? dec.m(P.tm) : null;
+  const range = META.months[0] + " … " + META.months[NM - 1];
+  const regionNote = res === 3
+    ? "12-month mean NO₂ (m), " + range
+    : "12-month mean NO₂ of the surrounding res-3 region · □ this " +
+      (res === 6 ? "cell" : "res-" + res + " region") + " now, " + range;
   const wantOwn = WEB && WEB.series2 && res > 3;
-  let own = wantOwn ? cellSeriesCache.get(res + ":" + f.id) : null;
+  const own = wantOwn ? cellSeriesCache.get(res + ":" + f.id) : null;
+  /* every shown region invalidates in-flight chart draws — a per-hex series
+     landing after the panel moved on must not overdraw the current hex */
+  const seq = ++chartSeq;
   if (wantOwn && !own) {
-    const seq = ++chartSeq;
     fetchCellSeries(res, f.id).then(a => {
-      if (a && seq === chartSeq) drawRegionChart(r3i, cellNow, a);
+      if (seq !== chartSeq) return;
+      if (a) drawRegionChart(r3i, cellNow, a);
+      else rp.note.textContent = regionNote;   // no per-hex series: don't promise teal
     });
   }
   drawRegionChart(r3i, cellNow, own || null);
-  const range = META.months[0] + " … " + META.months[NM - 1];
-  rp.note.textContent = (res === 3
-    ? "12-month mean NO₂ (m), " + range
-    : wantOwn
+  rp.note.textContent = wantOwn
     ? "12-month mean NO₂ — this hex (teal) vs its res-3 region (grey), " + range
-    : "12-month mean NO₂ of the surrounding res-3 region · □ this " +
-      (res === 6 ? "cell" : "res-" + res + " region") + " now, " + range);
+    : regionNote;
 }
 let chartSeq = 0;
 
@@ -1320,8 +1325,8 @@ function ecXAxis(months) {
 function drawRegionChart(r3i, cellNow, ser) {
   const ch = ecChart(rp.chart);
   if (!ch || r3i === undefined) return;
-  if (!R3.series) {   // web mode: region series still on its way
-    pendingChart = { r3i, cellNow };
+  if (!R3.series) {   // web mode: region series still on its way — park the whole
+    pendingChart = { r3i, cellNow, ser };   // draw, incl. any per-hex series
     ch.setOption({ graphic: [{ type: "text", left: 8, top: "middle",
       style: { text: "history loading …", fill: "#6e8489", font: "9.5px " + MONO } }] }, true);
     return;
