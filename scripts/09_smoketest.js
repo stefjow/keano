@@ -98,10 +98,12 @@ function ok(cond, label) {
 async function newPage(browser, url) {
   const page = await browser.newPage();
   const errors = [];
+  const dataReqs = [];
   page.on("pageerror", e => errors.push(String(e)));
   page.on("response", r => {
     const u = new URL(r.url());
     if (u.hostname === "127.0.0.1" && r.status() >= 400) errors.push(r.status() + " " + u.pathname);
+    if (u.pathname.endsWith(".bin")) dataReqs.push(u.pathname + u.search);
   });
   await page.goto(url, { waitUntil: "domcontentloaded" });
   // loading overlay removes itself once data + map are up; then wait for idle
@@ -110,7 +112,7 @@ async function newPage(browser, url) {
     const m = window._keanoMap;
     m.loaded() && !m.isMoving() ? r() : m.once("idle", r);
   }));
-  return { page, errors };
+  return { page, errors, dataReqs };
 }
 
 /* Pick a rendered res-3 hex whose center projects well inside the map and
@@ -473,7 +475,15 @@ async function topRegionsRun(browser, base) {
    blank map, neither of which the other runs would catch. */
 async function layerRun(browser, base) {
   console.log("layer control (groups + horizons):");
-  const { page, errors } = await newPage(browser, base);
+  const { page, errors, dataReqs } = await newPage(browser, base);
+
+  /* data/<month>/ is served immutable but named by month, so a rebuild of an
+     already-shipped month must not reuse the old URL — every .bin fetch has to
+     carry the build id or returning visitors read the previous layout. */
+  const unversioned = dataReqs.filter(u => !/[?&]v=\d+/.test(u));
+  ok(dataReqs.length > 0 && unversioned.length === 0,
+     dataReqs.length + " data requests all carry the build id" +
+     (unversioned.length ? " — MISSING on " + unversioned.slice(0, 3).join(", ") : ""));
 
   /* Every scale the client can ask for must exist in META.scales. A missing one
      surfaces as NaN in a tooltip or legend rather than an error, which is easy

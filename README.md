@@ -190,8 +190,15 @@ One template, two builds:
   res-4/5 tiers lazily; res-6 planes chunked by res-1 parent, ~50 KB per
   chunk, viewport-driven). Every `.bin` has a precompressed `.gz` sibling
   the host serves directly (`gzip_static` on nginx, `precompressed gzip` on
-  Caddy); `data/<month>/` paths are immutable, so far-future cache headers
-  apply, while `index.html` stays `no-cache`. The per-hex series and credit
+  Caddy); `data/<month>/` paths carry far-future
+  `immutable` cache headers, while `index.html` stays `no-cache`. The directory
+  is named by *month*, not by content, so rebuilding a month that has already
+  shipped serves changed bytes at an unchanged URL — which bit exactly once,
+  when new planes were added to a deployed `2026-06` and returning browsers kept
+  reading the previous layout out of cache. Every data URL therefore carries
+  `?v=<build>` from `META.build`; `index.html` is always fresh and supplies the
+  current one, so a rebuild is a new URL. Paths are untouched, so the retention
+  glob and the deploy pruning are unaffected. The per-hex series and credit
   files (`s4/s5/s6.bin`, `c4/c5/c6.bin`) are read with HTTP range requests,
   so the host has to answer 206 — and they are the only `.bin`s without a
   `.gz` sibling, since a range into a precompressed file is meaningless.

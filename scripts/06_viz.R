@@ -409,6 +409,17 @@ stats = as.list(monthly[month == latest,
 meta = list(
   month = latest,
   generated = format(Sys.time(), "%Y-%m-%d %H:%M"),
+  # Cache key for every data URL. data/<month>/ is named by month, not by
+  # content, so rebuilding a month that already shipped serves changed bytes at
+  # an unchanged URL — and those URLs carry max-age=31536000, immutable, which
+  # tells the browser never even to revalidate. That is what happened when the
+  # 5-year and windowed-credit planes were added to an already-deployed 2026-06:
+  # returning visitors kept a t4/t5.bin from the previous layout and read the
+  # planes at the wrong offsets. index.html is no-cache, so it always arrives
+  # fresh and carries the current build; appending it to the data URLs makes a
+  # rebuild a new URL. Deliberately changes on every build — correctness is
+  # worth more than saving a re-fetch of a few hundred KB.
+  build = format(Sys.time(), "%Y%m%d%H%M%S"),
   months = months_all,
   scales = list(m = list(lmin = lmin, lmax = lmax),
                 yoy = list(sym = sym_y), trend = list(sym = sym_t),

@@ -570,8 +570,13 @@ async function inflateContainer() {
     throw new Error("payload length mismatch: " + bin.length + " vs " + META.bin_len);
   return bin;
 }
+/* Every data URL carries the build id: data/<month>/ is immutable-cached but
+   named by month, so a rebuild of an already-shipped month would otherwise be
+   served from a stale cache at the old layout. See meta$build in 06_viz.R. */
+const dataUrl = name => WEB.base + "/" + name +
+                        (META.build ? "?v=" + META.build : "");
 async function fetchBytes(name) {
-  const resp = await fetch(WEB.base + "/" + name);
+  const resp = await fetch(dataUrl(name));
   if (!resp.ok) throw new Error(name + " → HTTP " + resp.status);
   return new Uint8Array(await resp.arrayBuffer());
 }
@@ -805,7 +810,7 @@ async function fetchCellSeries(res, cellIdx) {
   if (!rangesOK) return null;
   const o = cellIdx * NM * 2;
   try {
-    const resp = await fetch(WEB.base + "/" + WEB.series2[res], {
+    const resp = await fetch(dataUrl(WEB.series2[res]), {
       headers: { Range: "bytes=" + o + "-" + (o + NM * 2 - 1) }
     });
     if (resp.status !== 206) {   // server ignores ranges: don't pull whole file
@@ -851,7 +856,7 @@ async function fetchCellCredit(res, cellIdx) {
   if (n > 0) {
     const o = c.credBase + 2 * c.koff[li];
     try {
-      const resp = await fetch(WEB.base + "/" + WEB.cred2[res], {
+      const resp = await fetch(dataUrl(WEB.cred2[res]), {
         headers: { Range: "bytes=" + o + "-" + (o + 2 * n - 1) }
       });
       if (resp.status !== 206) { rangesOK = false; return null; }
