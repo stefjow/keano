@@ -24,6 +24,7 @@
     --warn:    #e8873c;   /* worsening (semantic, not accent) */
     --mono: "SF Mono", "Cascadia Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
     --sans: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --chart-h: 74px;      /* global-signal sparkline; the mobile sheet is sized from it */
   }
   * { box-sizing: border-box; margin: 0; }
   html, body { height: 100%; }
@@ -284,7 +285,7 @@
     font-family: var(--mono); font-size: 12px;
     float: right; font-variant-numeric: tabular-nums;
   }
-  .chart-block .chart { height: 74px; }
+  .chart-block .chart { height: var(--chart-h); }
 
   /* sub-selector: same control, one step quieter than the primary row */
   .layers.sub { margin-top: 5px; border-color: var(--line); }
@@ -343,7 +344,16 @@
     }
     #sheet > * { pointer-events: auto; }
     #region-panel { order: -1; margin-top: 0; }
-    aside .body { max-height: 52vh; }
+    /* Sized to the two charts and no further, so an open region panel still has
+       the top of the screen: chart block = label (13) + margin (6) + chart,
+       two of them, plus the flex gap (16) and the body's padding (2 × 12). One
+       more label row (19) leaves the top-regions heading peeking below the
+       second chart, which is what advertises that the rest scrolls. The vh cap
+       keeps short landscape viewports from getting a *taller* sheet than they
+       had. */
+    aside .body {
+      max-height: min(calc(2 * (19px + var(--chart-h)) + 16px + 24px + 19px), 52vh);
+    }
   }
   @media (max-width: 520px) {
     .wordmark span { display: none; }
