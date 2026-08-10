@@ -294,6 +294,12 @@ const subLabels = page => page.$$eval("#sub-buttons button", bs =>
   bs.map(b => b.textContent));
 const pickSub = (page, i) =>
   page.evaluate(n => document.querySelectorAll("#sub-buttons button")[n].click(), i);
+const cardState = page => page.evaluate(() => ({
+  labels: [...document.querySelectorAll("#rp-metrics .k")].map(e => e.textContent),
+  values: [...document.querySelectorAll("#rp-metrics .v")].map(e => e.textContent),
+  accented: [...document.querySelectorAll("#rp-metrics div")]
+              .map((e, i) => e.classList.contains("on") ? i : -1).filter(i => i >= 0)
+}));
 const layerState = page => page.evaluate(() => ({
   active: activeLayer,
   group: [...document.querySelectorAll("#layer-buttons button")]
@@ -480,6 +486,34 @@ async function layerRun(browser, base) {
   await pickGroup(page, "Change");
   ok((await layerState(page)).active === "trend5",
      "switching away and back restores the last horizon");
+
+  /* The panel carries one card per primary layer, each naming its horizon, and
+     a pinned panel must follow a horizon switch rather than going stale. */
+  const hex = await pickHex(page);
+  ok(hex, "a res-3 hex renders clear of the UI");
+  if (hex) {
+    await page.mouse.click(hex.x, hex.y);
+    await page.waitForFunction(
+      "document.getElementById('region-panel').classList.contains('pinned')",
+      { timeout: 5000 }).catch(() => {});
+    await pickGroup(page, "Change");
+    await pickSub(page, 0);                       // overall
+    const a = await cardState(page);
+    ok(a.labels.length === 3, "the panel shows one card per primary layer (" +
+       a.labels.join(" / ") + ")");
+    ok(a.accented.length === 1 && a.accented[0] === 0,
+       "the card the map is painted by is the accented one");
+    await pickSub(page, 1);                       // 5 years
+    const b = await cardState(page);
+    ok(b.labels[0] !== a.labels[0],
+       "switching horizon relabels the card (" + a.labels[0] + " → " + b.labels[0] + ")");
+    ok(b.values[0] !== a.values[0] || a.values[0] === "–",
+       "and re-reads its value for the pinned hex (" + a.values[0] + " → " + b.values[0] + ")");
+    await pickGroup(page, "Credit");
+    const c = await cardState(page);
+    ok(c.accented.length === 1 && c.accented[0] === 1,
+       "selecting Credit moves the accent to the credit card");
+  }
 
   ok(errors.length === 0, "no page errors / failed local requests" +
      (errors.length ? " — " + errors.join("; ") : ""));

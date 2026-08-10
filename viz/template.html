@@ -230,14 +230,17 @@
     font-size: 10.5px; color: var(--muted);
     letter-spacing: 0.07em; text-transform: uppercase; white-space: nowrap;
   }
-  .rp-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 9px; }
+  .rp-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 9px; }
+  /* the card the map is currently painted by */
+  .rp-metrics div.on { box-shadow: inset 0 0 0 1px rgba(79, 214, 194, 0.45); }
+  .rp-metrics div.on .k { color: var(--accent); }
   .rp-metrics div {
     background: var(--panel-2);
     border-radius: 3px;
     padding: 5px 6px;
   }
   .rp-metrics .k {
-    display: block; font-size: 9.5px; color: var(--muted);
+    display: block; font-size: 9.5px; color: var(--muted); white-space: nowrap;
     letter-spacing: 0.06em; text-transform: uppercase;
   }
   .rp-metrics .v {
@@ -919,21 +922,21 @@ RAMPS.credit12 = RAMPS.creditAll = RAMPS.credit;
    and hash keep one dimension instead of two. */
 const GROUPS = [
   { key: "change", label: "Change", subs: [
-      { key: "trend",  prop: "tt", label: "overall",
+      { key: "trend",  prop: "tt", label: "overall", short: "all",
         title: "annualised change of m since the cell's first year" },
-      { key: "trend5", prop: "t5", label: "5 years",
+      { key: "trend5", prop: "t5", label: "5 years", short: "5y",
         title: "annualised change of m over the last 5 years" },
-      { key: "yoy",    prop: "ty", label: "last year",
+      { key: "yoy",    prop: "ty", label: "last year", short: "1y",
         title: "change of m vs 12 months earlier" } ] },
   { key: "credit", label: "Credit", subs: [
-      { key: "credit",    prop: "tc", label: "last month",
+      { key: "credit",    prop: "tc", label: "last month", short: "1mo",
         title: "credit paid in the latest month" },
-      { key: "credit12",  prop: "cy", label: "12 months",
+      { key: "credit12",  prop: "cy", label: "12 months", short: "12mo",
         title: "credit paid over the trailing 12 months" },
-      { key: "creditAll", prop: "ca", label: "all time",
+      { key: "creditAll", prop: "ca", label: "all time", short: "all",
         title: "credit paid over the whole record" } ] },
   { key: "no2", label: "NO₂", subs: [
-      { key: "m", prop: "tm", label: "", title: "NO₂ level (12-month mean)" } ] }
+      { key: "m", prop: "tm", label: "", short: "", title: "NO₂ level (12-month mean)" } ] }
 ];
 const LAYERS = GROUPS.flatMap(g => g.subs);
 const groupOf = key => GROUPS.find(g => g.subs.some(x => x.key === key));
@@ -1405,28 +1408,34 @@ rp.h3.addEventListener("click", () => {
 });
 const AREA = { 3: "~12 400 km²", 4: "~1 770 km²", 5: "~250 km²", 6: "~36 km²" };
 let shownRegion = null;
+let shownFeature = null;
 function showRegion(f) {
   const P = f.properties;
+  shownFeature = f;
   if (shownRegion === P.id) return;
   shownRegion = P.id;
   const res = h3.getResolution(P.id);
   const [lat, lng] = h3.cellToLatLng(P.id);
-  const credKey = "credit" + res;
   rp.title.textContent = fmtCoord(lat, lng);
   rp.sub.textContent = (res === 6 ? "cell" : "region") +
                        " · res " + res + " · " + AREA[res];
   rp.h3.textContent = "⬡ " + P.id;
 
-  const cards = [
-    ["NO₂ m", "m", P.tm, "µmol/m²"],
-    ["YoY", "yoy", P.ty, ""],
-    ["Trend", "trend", P.tt, "/yr"],
-    ["Credit", credKey, P.tc, ""]
-  ];
+  /* One card per primary layer, each showing the horizon that layer is set to,
+     so the panel mirrors the control instead of the four flat buttons it used
+     to have. Showing every horizon at once would mean seven cards; showing some
+     of them would be arbitrary. The card the map is painted by is accented. */
   rp.metrics.textContent = "";
-  for (const [label, key, t, unit] of cards) {
+  for (const g of GROUPS) {
+    const sub = LAYERS.find(x => x.key === lastSub[g.key]);
+    const key = scaleKey(sub.key, res);
+    const t = P[sub.prop];
+    const unit = sub.key === "m" ? "µmol/m²" : isChange(sub.key) && sub.key !== "yoy"
+      ? "/yr" : "";
     const d = document.createElement("div");
-    const k = document.createElement("span"); k.className = "k"; k.textContent = label;
+    if (sub.key === activeLayer) d.className = "on";
+    const k = document.createElement("span"); k.className = "k";
+    k.textContent = sub.short ? g.label + " " + sub.short : g.label;
     const v = document.createElement("span"); v.className = "v";
     v.textContent = t < 0 ? "–" : fmt[key](dec[key](t)) + unit;
     d.append(k, v);
@@ -1671,6 +1680,8 @@ function selectLayer(key, redraw) {
   drawLegend();
   writeHash();
   if (redraw) updateTopRegions();
+  // re-render an open panel so its cards follow the horizon just chosen
+  if (shownFeature && !rp.panel.hidden) { shownRegion = null; showRegion(shownFeature); }
 }
 function renderSubs(g) {
   subBtns.textContent = "";
