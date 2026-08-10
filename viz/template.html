@@ -766,6 +766,7 @@ function loadSeries() {
     const sec = mkSections(bytes, WEB.files.series.manifest);
     R3.series = sec.u16("r3series");
     setCr3History(sec);
+    // the whole parked draw, per-hex series and credit events included
     if (pendingChart) drawRegionChart(...pendingChart);
   }).catch(console.error);
 }
@@ -1385,27 +1386,32 @@ function showRegion(f) {
   rp.panel.hidden = false;   // before the chart draws: ECharts measures its container
   const r3i = r3Index.get(res === 3 ? P.id : parentR3(P.id));
   const cellNow = res > 3 && P.tm >= 0 ? dec.m(P.tm) : null;
+  const range = META.months[0] + " … " + META.months[NM - 1];
+  const regionNote = res === 3
+    ? "12-month mean NO₂ (m), " + range
+    : "12-month mean NO₂ of the surrounding res-3 region · □ this " +
+      (res === 6 ? "cell" : "res-" + res + " region") + " now, " + range;
   const wantOwn = WEB && WEB.series2 && res > 3;
   const ckey = res + ":" + f.id;
-  let own = wantOwn ? cellSeriesCache.get(ckey) : null;
-  let cred = wantOwn ? cellCreditCache.get(ckey) : null;
+  const own = wantOwn ? cellSeriesCache.get(ckey) : null;
+  const cred = wantOwn ? cellCreditCache.get(ckey) : null;
+  /* every shown region invalidates in-flight chart draws — a per-hex series
+     landing after the panel moved on must not overdraw the current hex */
+  const seq = ++chartSeq;
   if (wantOwn && (!own || cred === undefined)) {
     // one round trip for both: the series row and the credit block are
     // independent ranges, so they go out together
-    const seq = ++chartSeq;
     Promise.all([fetchCellSeries(res, f.id), fetchCellCredit(res, f.id)])
       .then(([a, cr]) => {
-        if (seq === chartSeq && (a || cr)) drawRegionChart(r3i, cellNow, a, cr, res);
+        if (seq !== chartSeq) return;
+        if (a || cr) drawRegionChart(r3i, cellNow, a, cr, res);
+        if (!a) rp.note.textContent = regionNote;  // no per-hex series: don't promise teal
       });
   }
   drawRegionChart(r3i, cellNow, own || null, cred || null, res);
-  const range = META.months[0] + " … " + META.months[NM - 1];
-  rp.note.textContent = (res === 3
-    ? "12-month mean NO₂ (m), " + range
-    : wantOwn
+  rp.note.textContent = wantOwn
     ? "12-month mean NO₂ — this hex (teal) vs its res-3 region (grey), " + range
-    : "12-month mean NO₂ of the surrounding res-3 region · □ this " +
-      (res === 6 ? "cell" : "res-" + res + " region") + " now, " + range);
+    : regionNote;
 }
 let chartSeq = 0;
 
@@ -1462,8 +1468,8 @@ function setCredNote(glyph, color, text) {
 function drawRegionChart(r3i, cellNow, ser, cred, res) {
   const ch = ecChart(rp.chart);
   if (!ch || r3i === undefined) return;
-  if (!R3.series) {   // web mode: region series still on its way
-    pendingChart = [r3i, cellNow, ser, cred, res];
+  if (!R3.series) {   // web mode: region series still on its way — park the whole
+    pendingChart = [r3i, cellNow, ser, cred, res];   // draw, per-hex data included
     rp.cred.textContent = "";
     ch.setOption({ graphic: [{ type: "text", left: 8, top: "middle",
       style: { text: "history loading …", fill: "#6e8489", font: "9.5px " + MONO } }] }, true);

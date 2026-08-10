@@ -29,7 +29,8 @@ const os = require("os");
 const path = require("path");
 const puppeteer = require("puppeteer-core");
 
-const WEB_DIR = path.join(__dirname, "..", "data", "viz", "web");
+const WEB_DIR = process.env.KEANO_WEB_DIR ||
+                path.join(__dirname, "..", "data", "viz", "web");
 const HOVER_FLAG = "--blink-settings=primaryHoverType=2,availableHoverTypes=2," +
                    "primaryPointerType=4,availablePointerTypes=4";
 
@@ -119,13 +120,23 @@ function pickHex(page) {
     const rect = map.getContainer().getBoundingClientRect();
     const cx = rect.width * 0.6, cy = rect.height * 0.4;
     let best = null;
-    for (const f of map.queryRenderedFeatures({ layers: ["r3-fill"] })) {
-      const [la, lo] = h3.cellToLatLng(f.properties.id);
-      const p = map.project([lo, la]);
-      if (p.x < 400 || p.y < 130 || p.x > rect.width - 80 || p.y > rect.height - 220) continue;
-      const d = (p.x - cx) ** 2 + (p.y - cy) ** 2;
-      if (!best || d < best.d) best = { id: f.properties.id,
-                                        x: rect.left + p.x, y: rect.top + p.y, d };
+    const seen = new Set();
+    /* sample point queries across the clear zone: on the globe projection,
+       geometry-less / whole-viewport queries come back empty whenever a
+       screen corner misses the planet, but point queries always work */
+    for (let gx = 0.32; gx <= 0.93; gx += 0.03) {
+      for (let gy = 0.2; gy <= 0.68; gy += 0.04) {
+        const f = map.queryRenderedFeatures([rect.width * gx, rect.height * gy],
+                                            { layers: ["r3-fill"] })[0];
+        if (!f || seen.has(f.properties.id)) continue;
+        seen.add(f.properties.id);
+        const [la, lo] = h3.cellToLatLng(f.properties.id);
+        const p = map.project([lo, la]);
+        if (p.x < 400 || p.y < 130 || p.x > rect.width - 80 || p.y > rect.height - 220) continue;
+        const d = (p.x - cx) ** 2 + (p.y - cy) ** 2;
+        if (!best || d < best.d) best = { id: f.properties.id,
+                                          x: rect.left + p.x, y: rect.top + p.y, d };
+      }
     }
     return best;
   });
@@ -180,6 +191,41 @@ async function desktopRun(browser, base) {
   st = await panelState(page);
   ok(!st.pinned && !st.hidden, "chip releases the pin without hiding the panel");
   ok(st.height === before, "panel height unchanged on release (" + before + "px)");
+
+  // zoomed in, the region chart must gain the hovered hex's own series line
+  // (fetched per hex via HTTP range requests) next to the res-3 region line
+  const fine = await page.evaluate(id => new Promise(res => {
+    const map = window._keanoMap;
+    const [la, lo] = h3.cellToLatLng(id);
+    map.jumpTo({ center: [lo, la], zoom: 9.4 });
+    const t0 = Date.now();
+    (function poll() {   // fine chunks stream in after idle; retry briefly
+      const rect = map.getContainer().getBoundingClientRect();
+      let best = null;
+      const vp = [[0, 0], [rect.width, rect.height]];
+      for (const f of map.queryRenderedFeatures(vp, { layers: ["fine-fill"] })) {
+        const [fla, flo] = h3.cellToLatLng(f.properties.id);
+        const p = map.project([flo, fla]);
+        if (p.x < 400 || p.y < 130 || p.x > rect.width - 80 || p.y > rect.height - 220) continue;
+        const d = (p.x - rect.width * 0.6) ** 2 + (p.y - rect.height * 0.4) ** 2;
+        if (!best || d < best.d) best = { id: f.properties.id,
+                                          x: rect.left + p.x, y: rect.top + p.y, d };
+      }
+      if (best || Date.now() - t0 > 10000) return res(best);
+      setTimeout(poll, 250);
+    })();
+  }), hex.id);
+  ok(fine, "a fine-tier hex renders clear of the UI after zooming in");
+  if (fine) {
+    await page.mouse.move(fine.x, fine.y);
+    const twoLines = await page.waitForFunction(id => {
+      const ch = window.echarts && echarts.getInstanceByDom(document.getElementById("rp-chart"));
+      if (!ch || !document.getElementById("rp-h3").textContent.includes(id)) return false;
+      const s = ch.getOption().series;
+      return s.length === 2 && s[1].name === "this hex" && s[1].data.some(v => v != null);
+    }, { timeout: 8000 }, fine.id).then(() => true).catch(() => false);
+    ok(twoLines, "hovering " + fine.id + " draws its own line next to the region line");
+  }
 
   ok(errors.length === 0, "no page errors / failed local requests" +
      (errors.length ? " — " + errors.join("; ") : ""));
