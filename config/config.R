@@ -59,6 +59,16 @@ NO2_FLOOR               = 30    # µmol/m²; cells with m below are not eligible
 # on the direction of travel for 11.4% — perf_long averages in the 2019-2021
 # COVID dip and rebound, so it understates recent progress by ~1.6pp/yr.
 TREND_WINDOW_MONTHS     = 60
+# The reference month is allowed to be this far off TREND_WINDOW_MONTHS. Demanding
+# m at exactly t-60 leaves the layer blank wherever that one month is missing,
+# which at high latitude is most cells: polar night pushes the observed count in
+# the 12-month window below MIN_MONTHS_IN_WINDOW, and marginal cells flip in and
+# out year to year. Measured on the exact-60 rule, only 4% of cells with an m
+# today at 75degN and 45% at 60degN also had one in 2021-06, and perf_5y coverage
+# tracked that exactly. So take the nearest available month instead and annualise
+# by the real gap — the same thing perf_long does with its floating anchor, which
+# is why perf_long has no holes. 0 restores the strict behaviour.
+TREND_WINDOW_SLACK      = 6
 
 # --- The shipped credit rule (credit_v3) ---------------------------------------
 # Script 04 computes three generations side by side; only the newest is read

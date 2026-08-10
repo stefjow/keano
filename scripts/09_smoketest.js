@@ -321,6 +321,8 @@ const topState = page => page.evaluate(() => {
     title: document.getElementById("top-title").textContent,
     note: document.getElementById("top-note").textContent,
     rows: document.querySelectorAll("#top-table button.loc").length,
+    rowVals: [...document.querySelectorAll("#top-table tr")]
+               .map(tr => tr.querySelector(".cr")?.textContent),
     pinned: document.getElementById("region-panel").classList.contains("pinned"),
     pinnedRes: m ? h3.getResolution(m[0]) : null,
     cred: document.getElementById("rp-cred").textContent,
@@ -381,17 +383,17 @@ async function topRegionsRun(browser, base) {
   const scopes = await subLabels(page);
   ok(scopes.length === 3, "three credit windows offered (" + scopes.join(" / ") + ")");
 
-  /* Every scope fills the table, labels itself, and marks its own button. The
-     windowed scopes stay res-3 by design — per-cell credit history isn't
-     shipped — so they must say "Top regions" at any zoom. */
+  /* Every window fills the table, labels itself, marks its own button, and
+     says in the note which window it is showing. */
+  const WIN_WORD = ["this month", "over the last 12 months", "over the full record"];
   for (let i = scopes.length - 1; i >= 0; i--) {
     await pickSub(page, i);
     await settleTop(page);
     const st = await topState(page);
     ok(st.scope === scopes[i], "scope “" + scopes[i] + "” is the pressed button");
     ok(st.rows > 0, "scope “" + scopes[i] + "” lists " + st.rows + " row(s), each with a →");
-    if (i > 0) ok(st.title.startsWith("Top regions"),
-                  "windowed scope “" + scopes[i] + "” stays regional (" + st.title + ")");
+    ok(st.note.includes(WIN_WORD[i]),
+       "scope “" + scopes[i] + "” names its window in the note (" + WIN_WORD[i] + ")");
   }
 
   await pickSub(page, 0);   // back to last-month for the per-tier walk
@@ -432,6 +434,34 @@ async function topRegionsRun(browser, base) {
        "res-" + res + " credit is the hex's own, not its region's");
   }
 
+  /* Regression: the windowed credit scopes used to have no fine-tier planes, so
+     the list fell back to res-3 regions and → flew the reader out to zoom 4.8
+     however far they had zoomed in. They have planes now, so a window must
+     behave exactly like the month scope at a fine tier. */
+  for (const win of [1, 2]) {
+    await pickSub(page, win);
+    await zoomTo(page, 9.2);
+    const w = await topState(page);
+    ok(w.res === 6, "window “" + scopes[win] + "”: still at res-6 (" + w.res + ")");
+    ok(w.title === "Top cells — in view",
+       "window “" + scopes[win] + "” lists cells, not regions (" + w.title + ")");
+    ok(w.rows > 0, "window “" + scopes[win] + "” lists " + w.rows + " cell(s) in view");
+    if (w.rows) {
+      const rowVal = w.rowVals[0];
+      const f = await flyFirstRow(page);
+      ok(f.res === 6, "window “" + scopes[win] + "”: → stays at res-6 (zoom " +
+         f.zoom.toFixed(2) + ")");
+      ok(f.pinnedRes === 6, "window “" + scopes[win] + "”: → pins a res-6 cell");
+      /* The row and the credit card read the same plane for the same hex, so
+         they must print the same string. They did not when the list ranked by
+         one window while the map painted another. */
+      const cards = await cardState(page);
+      ok(cards.values[1] === rowVal,
+         "window “" + scopes[win] + "”: list row and panel card agree (" +
+         rowVal + " vs " + cards.values[1] + ")");
+    }
+  }
+
   ok(errors.length === 0, "no page errors / failed local requests" +
      (errors.length ? " — " + errors.join("; ") : ""));
   await page.close();
@@ -444,6 +474,34 @@ async function topRegionsRun(browser, base) {
 async function layerRun(browser, base) {
   console.log("layer control (groups + horizons):");
   const { page, errors } = await newPage(browser, base);
+
+  /* Every scale the client can ask for must exist in META.scales. A missing one
+     surfaces as NaN in a tooltip or legend rather than an error, which is easy
+     to ship unnoticed: the layers, the four credit windows per resolution and
+     the credit-history scales are all keyed by string. */
+  const scales = await page.evaluate(() => {
+    const need = ["m", "yoy", "trend", "trend5"];
+    for (const r of [3, 4, 5, 6]) {
+      for (const sfx of ["", "y", "a", "h"]) need.push("credit" + r + sfx);
+    }
+    const missing = need.filter(k => !S[k] ||
+      !(Number.isFinite(S[k].max) || Number.isFinite(S[k].sym) ||
+        Number.isFinite(S[k].lmin)));
+    // and every decoder/formatter the layers resolve to must be a function
+    const bad = [];
+    for (const l of LAYERS) for (const r of [3, 4, 5, 6]) {
+      const k = scaleKey(l.key, r);
+      if (typeof dec[k] !== "function" || typeof fmt[k] !== "function") bad.push(k);
+      else if (!Number.isFinite(dec[k](0.5))) bad.push(k + " (NaN)");
+    }
+    return { missing, bad, n: need.length };
+  });
+  ok(scales.missing.length === 0,
+     scales.n + " scales present in META" +
+     (scales.missing.length ? " — MISSING " + scales.missing.join(", ") : ""));
+  ok(scales.bad.length === 0,
+     "every layer resolves to a finite decoder + formatter" +
+     (scales.bad.length ? " — BAD " + scales.bad.join(", ") : ""));
 
   const groups = await page.$$eval("#layer-buttons button", bs => bs.map(b => b.textContent));
   ok(groups.length === 3 && groups.join("/") === "Change/Credit/NO₂",
@@ -515,9 +573,45 @@ async function layerRun(browser, base) {
        "selecting Credit moves the accent to the credit card");
   }
 
+  /* The list must follow the drawn tier even when the active layer is not a
+     credit layer at all: switching Change horizons leaves the credit window
+     alone, and the list used to fall back to res-3 whenever that window was not
+     "last month" — so a reader on 5-year change at res-6 got res-3 rows and an
+     arrow that zoomed them out. */
+  for (const [win, wname] of [[0, "last month"], [2, "all time"]]) {
+    await pickGroup(page, "Credit");
+    await pickSub(page, win);
+    await pickGroup(page, "Change");
+    await pickSub(page, 1);                 // 5 years
+    await zoomTo(page, 9.2);
+    const st = await topState(page);
+    ok(st.res === 6 && st.title === "Top cells — in view",
+       "Change/5y with the “" + wname + "” window still lists res-6 (" +
+       st.title + ")");
+    if (st.rows) {
+      const f = await flyFirstRow(page);
+      ok(f.res === 6, "Change/5y + “" + wname + "”: → stays at res-6 (zoom " +
+         f.zoom.toFixed(2) + ")");
+    }
+  }
+
   ok(errors.length === 0, "no page errors / failed local requests" +
      (errors.length ? " — " + errors.join("; ") : ""));
   await page.close();
+
+  /* A deep link to a credit window must also put the TOP LIST on that window.
+     topScope used to be hardcoded to "month" and only moved on a click, so
+     #creditAll painted all-time credit while the list still ranked last month —
+     the map and the table disagreed until you touched the control. */
+  for (const [key, want] of [["credit", "this month"],
+                             ["credit12", "over the last 12 months"],
+                             ["creditAll", "over the full record"]]) {
+    const dl = await newPage(browser, base + "#" + key);
+    const note = await $text(dl.page, "#top-note");
+    ok(note.includes(want),
+       "#" + key + " starts the top list on its own window (" + want + ")");
+    await dl.page.close();
+  }
 
   /* Cold load of a horizon deep link: the group row, the horizon row and the
      paint all have to come back from the hash alone, not just after a click. */

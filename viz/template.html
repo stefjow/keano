@@ -399,8 +399,13 @@
       <i>5 years</i> the same rate over a fixed five-year window, and
       <i>last year</i> simply compares m to its value twelve months earlier.
       The three can disagree, and that is the point — the overall figure
-      averages in 2019–2021, so a cell improving quickly of late looks slower
-      there than in the five-year view.</p>
+      averages in 2019–2021, which were flat, so a cell improving quickly of
+      late looks slower there than in the five-year view.</p>
+      <p>The five-year and last-year views need m from that far back, and in the
+      far north there often isn't any: polar night leaves too few observed
+      months for a 12-month mean, so those hexes stay unfilled. The overall view
+      has no gaps because it measures from whenever each cell's record actually
+      starts.</p>
       <p><b>Credit</b> shows credit paid, either in the latest month or summed
       over the last twelve months or the whole record; it is explained below.
       <b>NO₂</b> shows the current level of m.</p>
@@ -946,12 +951,22 @@ const scaleKey = (key, r) =>
   key === "credit12"  ? "credit" + r + "y" :
   key === "creditAll" ? "credit" + r + "a" : key;
 const isChange = key => key === "yoy" || key === "trend" || key === "trend5";
+/* credit layer -> which window the top list ranks by */
+const CREDIT_SCOPE = { credit: "month", credit12: "12m", creditAll: "all" };
+/* window -> [fine-tier plane, scale suffix, wording] */
+const SCOPE_PLANE = {
+  month: ["tc", "",  "this month"],
+  "12m": ["cy", "y", "over the last 12 months"],
+  all:   ["ca", "a", "over the full record"]   // wording matches the res-3 note
+};
 /* Hash routing: #<layer>, #<layer>/<h3-id> (deep link to a hex) or
    #<layer>/@<lat>,<lng>,<zoom> (deep link to a view) */
 const HASH = location.hash.slice(1).split("/");
 let activeLayer = LAYERS.some(l => l.key === HASH[0]) ? HASH[0] : "trend";
-/* which credit window the map and the top list are showing */
-let topScope = "month";
+/* Which credit window the map and the top list are showing. Derived from the
+   layer, so a deep link to #credit12 / #creditAll starts the list on the same
+   window the map is painting rather than on last month. */
+let topScope = CREDIT_SCOPE[activeLayer] || "month";
 const startHex = HASH[1] && h3.isValidCell(HASH[1]) ? HASH[1] : null;
 const startView = (() => {
   const m = HASH[1] && HASH[1].match(/^@(-?\d+\.?\d*),(-?\d+\.?\d*),(\d+\.?\d*)z?$/);
@@ -1711,7 +1726,6 @@ renderSubs(groupOf(activeLayer));
    both the map planes and the top list, so the two can never disagree about
    which window is on screen. Selecting a non-credit layer leaves the list on
    whichever window was last chosen. */
-const CREDIT_SCOPE = { credit: "month", credit12: "12m", creditAll: "all" };
 
 function hex2rgb(h) { return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); }
 function drawLegend() {
@@ -1845,13 +1859,14 @@ function updateTopRegions() {
   const note = document.getElementById("top-note");
   tb.textContent = "";
 
-  /* per-cell credit history isn't shipped, so the windowed scopes stay
-     regional at every zoom. In the month scope the list follows whichever
-     fine tier the map is drawing: res-4/5/6 each ship a current-month credit
-     plane, so all three can be listed — and, crucially, flown to at their own
-     zoom instead of dropping the reader back out to res-3. */
+  /* The list follows whichever fine tier the map is drawing, in every credit
+     window: res-4/5/6 now carry a plane per window (tc / cy / ca), so a hex can
+     be listed and — crucially — flown to at its own zoom instead of dropping
+     the reader back out to res-3. Only the month window used to have fine-tier
+     planes, which is why this was res-3-only before. */
   const r = displayRes();
-  if (topScope === "month" && r >= 4) {
+  const [prop, sfx, winLab] = SCOPE_PLANE[topScope];
+  if (r >= 4) {
     /* --- individual hexes of the active fine tier, in view ---------------- */
     const T = TIERS[r];
     if (!T.chunks && !tierReady(r)) {   // t4/t5 still fetching; refresh queued
@@ -1859,7 +1874,7 @@ function updateTopRegions() {
       return;
     }
     /* loaded chunks only — updateFine is already fetching the missing ones */
-    const PAD = 1.0, credit = dec["credit" + r];
+    const PAD = 1.0, ckey = "credit" + r + sfx, credit = dec[ckey];
     const cand = [];   // [credit, lat, lng, id]
     for (let j = 0; j < NP; j++) {
       const la3 = r3Lat[j];
@@ -1875,29 +1890,34 @@ function updateTopRegions() {
         if (v === 0) continue;
         for (let bit = 0; bit < 8; bit++) {
           if (!(v >> bit & 1)) continue;
-          if (c.tc[li] > 1) {   // level 1 = credit 0; >1 = paid credit
+          const lev = c[prop][li];
+          if (lev > 1) {   // level 1 = credit 0; >1 = paid credit
             const id = childId(parent, r, by * 8 + bit);
             const [la, lo] = h3.cellToLatLng(id);
             if (la >= s && la <= n && inLng(lo, w, e))
-              cand.push([credit(lev2t8(c.tc[li])), la, lo, id]);
+              cand.push([credit(lev2t8(lev)), la, lo, id]);
           }
           li++;
         }
       }
     }
+    /* Only res-6 in the month window is a single cell's own undercut, and so a
+       percentage. Everything else is a sum — over child hexes, over months, or
+       both — and reads as Σ. */
     cand.sort((a, z) => z[0] - a[0]);
-    /* res-6 carries a cell's own undercut (a %); res-4/5 sum their res-6
-       children, so those rows read like the regional ones — Σ, as at res-3 */
-    title.textContent = r === 6 ? "Top cells — in view" : "Top areas — in view";
-    note.textContent = r === 6
+    title.textContent = (r === 6 ? "Top cells" : "Top areas") + " — in view";
+    note.textContent = (r === 6 && topScope === "month"
       ? "% = the cell’s paid credit this month (undercut of its own lowest " +
-        "month in the past 5 years × neighbourhood weight). Click → to fly."
-      : "Σ = paid credit summed over the res-6 cells of a ~" + TIER_KM2[r] +
-        " km² area this month. Zoom in for individual cells. Click → to fly.";
+        "month in the past 5 years × neighbourhood weight)."
+      : (r === 6 ? "Σ = credit paid to this cell " + winLab
+                 : "Σ = paid credit summed over the res-6 cells of a ~" +
+                   TIER_KM2[r] + " km² area " + winLab) +
+        (topScope === "month" ? ". Zoom in for individual cells" : "") + ".") +
+      " Click → to fly.";
     cand.slice(0, 10).forEach(([cr, la, lo, id], i) => {
       tb.appendChild(topRow(i, [
         ["rk", String(i + 1)], ["", fmtCoord(la, lo)],
-        ["cr", fmt["credit" + r](cr)]
+        ["cr", fmt[ckey](cr)]
       ], la, lo, HEX_ZOOM[r], id));
     });
     if (cand.length === 0)

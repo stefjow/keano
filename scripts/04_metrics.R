@@ -12,9 +12,12 @@
 #   perf_short YoY change of m
 #   perf_long  annualized change of m vs the cell's first valid m (a window
 #              that grows: 7.2 years as of 2026-06)
-#   perf_5y    the same annualized rate over a FIXED TREND_WINDOW_MONTHS window,
-#              so it stays comparable as the record lengthens. NA until a cell
-#              has that much history
+#   perf_5y    the same annualized rate over a ~TREND_WINDOW_MONTHS window, so
+#              it stays comparable as the record lengthens. The reference is the
+#              nearest month with an m within +/-TREND_WINDOW_SLACK of t-60,
+#              annualized by the real gap — demanding exactly t-60 blanked the
+#              layer for most cells above ~60degN. NA until a cell has that much
+#              history
 #   baseline   lowest m in the window t-BASELINE_WINDOW_MONTHS..t-BASELINE_
 #              EXCLUDE_MONTHS ("best year that ended at least a year ago").
 #              Excluding the freshest year keeps the baseline from chasing m
@@ -167,11 +170,25 @@ do_shard = function(s) {
     NA_real_
   )]
 
-  # Medium horizon: the same annualised rate over a fixed 60-month window, so
-  # it does not keep lengthening the way perf_long's since-first-year span does.
-  # NA for the first TREND_WINDOW_MONTHS of a cell's record, by construction.
-  dt[, perf_5y := (m / shift(m, TREND_WINDOW_MONTHS))^(12 / TREND_WINDOW_MONTHS) - 1,
-     by = cell_id]
+  # Medium horizon: the same annualised rate over a ~60-month window, so it does
+  # not keep lengthening the way perf_long's since-first-year span does. The
+  # reference is the nearest month to t-TREND_WINDOW_MONTHS that actually has an
+  # m, within +/-TREND_WINDOW_SLACK, and the rate is annualised by the real gap;
+  # insisting on exactly t-60 blanked the layer for most high-latitude cells (see
+  # config). Offsets are tried closest-first, preferring the longer window on a
+  # tie, so a cell that has m at exactly t-60 is unaffected — this only ever adds
+  # coverage. NA for the first ~60 months of a cell's record, by construction.
+  dt[, `:=`(m_ref = NA_real_, lag_ref = NA_integer_)]
+  for (d in c(0L, as.vector(rbind(seq_len(TREND_WINDOW_SLACK),
+                                  -seq_len(TREND_WINDOW_SLACK))))) {
+    L = TREND_WINDOW_MONTHS + d
+    if (L < 1L) next
+    dt[, cand := shift(m, L), by = cell_id]
+    dt[is.na(m_ref) & is.finite(cand), `:=`(m_ref = cand, lag_ref = L)]
+  }
+  dt[, perf_5y := fifelse(has_m & is.finite(m_ref) & m_ref > 0,
+                          (m / m_ref)^(12 / lag_ref) - 1, NA_real_)]
+  dt[, c("m_ref", "lag_ref", "cand") := NULL]
 
   # Expiring-min baseline, parameterised by how far back the window has to
   # stop: v1 holds it back a year, credit_v2 stops at t-1 (see config).
@@ -264,6 +281,7 @@ cl = makeCluster(max(1L, min(N_WORKERS, length(shards))), outfile = "")
 clusterExport(cl, c("do_shard", "parent_r4", "HEXC", "midx_full",
                     "DATA_PANEL", "DATA_METRICS", "DATA_LOOKUP",
                     "WINDOW_MONTHS", "MIN_MONTHS_IN_WINDOW", "TREND_WINDOW_MONTHS",
+                    "TREND_WINDOW_SLACK",
                     "BASELINE_WINDOW_MONTHS", "BASELINE_EXCLUDE_MONTHS",
                     "CREDIT_MARGIN", "NO2_FLOOR",
                     "CREDIT_V2_EXCLUDE_MONTHS", "CREDIT_V2_MARGIN",
