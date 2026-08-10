@@ -248,6 +248,9 @@
   #region-panel .rp-note {
     margin-top: 5px; font-size: 10.5px; color: var(--muted);
   }
+  /* height reserved so the credit line arriving late (it waits on a range
+     request) never resizes the panel — same reason as the pin chip */
+  #rp-cred { min-height: 13px; line-height: 13px; }
 
   /* --- Global signal panel ------------------------------------------------ */
   aside {
@@ -464,6 +467,7 @@
         </div>
         <div class="rp-metrics" id="rp-metrics"></div>
         <div id="rp-chart"></div>
+        <p class="rp-note" id="rp-cred"></p>
         <p class="rp-note" id="rp-note"></p>
       </div>
     </div>
@@ -553,6 +557,7 @@ function mkSections(bytes, manifest) {
     u8: name => undelta8(raw(name)),
     u16: name => undelta16(new Uint16Array(cut(name))),
     u16raw: name => new Uint16Array(cut(name)),
+    u32: name => new Uint32Array(cut(name)),
     f32: name => new Float32Array(cut(name))
   };
 }
@@ -568,11 +573,41 @@ const idAt3 = j => R3.ids.substr(j * 15, 15);
 const POP = new Uint8Array(256);
 for (let i = 1; i < 256; i++) POP[i] = POP[i >> 1] + (i & 1);
 
+/* --- Credit history ---------------------------------------------------------
+   Which months a hex was actually paid in, and how much. 99.8% of hex-months
+   earn nothing, so this ships as events rather than a per-month plane: res-3
+   as a flat sorted key list (embedded, both builds), the finer tiers as
+   (month, level) pairs in c<r>.bin addressed by a per-cell count plane that
+   rides the tier's own gzipped planes — see 06_viz.R. */
+let CR3 = null;   // { keys: sorted Uint32Array of cell*NM+month, lev: Uint8Array }
+function setCr3History(sec) {
+  CR3 = { keys: sec.u32("cr3hk"), lev: sec.raw("cr3hv") };
+}
+/* [monthIdx, level] pairs for one res-3 region, from the sorted key block */
+function cr3Events(r3i) {
+  if (!CR3 || r3i == null) return null;
+  const K = CR3.keys, lo = r3i * NM, hi = lo + NM;
+  let a = 0, b = K.length;
+  while (a < b) { const m = (a + b) >> 1; if (K[m] < lo) a = m + 1; else b = m; }
+  const out = [];
+  for (let i = a; i < K.length && K[i] < hi; i++) out.push([K[i] - lo, CR3.lev[i]]);
+  return out;
+}
+
 /* A chunk holds bitmap + planes for parents [first, first+nR3); cellStart is
-   the tier-global index of its first cell (stable feature ids). */
-function fillChunk(T, c, bm, planes) {
+   the tier-global index of its first cell (stable feature ids). `k` is the
+   per-cell credit-event count, prefix-summed here so a hover can address the
+   cell's block in c<r>.bin without any stored offset. */
+function fillChunk(T, c, bm, planes, k) {
   c.bm = bm;
   Object.assign(c, planes);
+  if (k) {
+    const ko = new Uint32Array(c.nCells + 1);
+    let racc = 0;
+    for (let i = 0; i < c.nCells; i++) { ko[i] = racc; racc += k[i]; }
+    ko[c.nCells] = racc;
+    c.k = k; c.koff = ko;
+  } else { c.k = null; c.koff = null; }
   const off = new Uint32Array(c.nR3 + 1);
   let acc = 0;
   for (let i = 0; i < c.nR3; i++) {
@@ -596,11 +631,13 @@ function chunkFor(T, j) {
   }
   return null;
 }
-function wholeTierChunk(T, r, sec) {
-  const c = { first: 0, nR3: NP, cellStart: 0, nCells: META.n[r], loaded: false };
+function wholeTierChunk(T, r, sec, withCredit) {
+  const c = { first: 0, nR3: NP, cellStart: 0, nCells: META.n[r],
+              credBase: 0, loaded: false };
   fillChunk(T, c, sec.raw("bm" + r),
             { tm: sec.u8("tm" + r), ty: sec.u8("ty" + r),
-              tt: sec.u8("tt" + r), tc: sec.u8("tc" + r) });
+              tt: sec.u8("tt" + r), tc: sec.u8("tc" + r) },
+            withCredit ? sec.raw("k" + r) : null);
   return c;
 }
 
@@ -628,9 +665,13 @@ function setupSingle(bin) {
     series: sec.u16("r3series")
   };
   finishR3(sec);
+  setCr3History(sec);
+  /* no per-hex m series in this build (s<r>.bin is web-only), so the fine
+     tiers carry no credit history either — a hex's payouts would have nothing
+     but the region line to sit on. res-3 markers work in both builds. */
   for (const [r, B] of [[4, 1], [5, 8], [6, 64]]) {
     const T = TIERS[r] = { B, chunks: null };
-    T.chunks = [wholeTierChunk(T, r, sec)];
+    T.chunks = [wholeTierChunk(T, r, sec, false)];
   }
 }
 async function setupWebCore() {
@@ -644,8 +685,9 @@ async function setupWebCore() {
   finishR3(sec);
   TIERS[4] = { B: 1, chunks: null, file: WEB.files.t4 };
   TIERS[5] = { B: 8, chunks: null, file: WEB.files.t5 };
-  const chunks = WEB.r6.map(([first, nR3, nCells], i) => ({
-    first, nR3, nCells, cellStart: 0, loaded: false, loading: false,
+  const chunks = WEB.r6.map(([first, nR3, nCells, credBase], i) => ({
+    first, nR3, nCells, cellStart: 0, credBase: credBase || 0,
+    loaded: false, loading: false,
     name: "r6-" + String(i).padStart(4, "0") + ".bin"
   }));
   let cs = 0;
@@ -660,7 +702,7 @@ function tierReady(r) {
   if (!T.pending) {
     T.pending = fetchBytes(T.file.name).then(bytes => {
       const sec = mkSections(bytes, T.file.manifest);
-      T.chunks = [wholeTierChunk(T, r, sec)];
+      T.chunks = [wholeTierChunk(T, r, sec, true)];
       scheduleFineRefresh();
     }).catch(err => { T.pending = null; console.error(err); });
   }
@@ -678,7 +720,9 @@ function requestChunks(T, list) {
         planes[nm] = undelta8(bytes.subarray(o, o + c.nCells));
         o += c.nCells;
       }
-      fillChunk(T, c, bm, planes);
+      // credit-event counts trail the planes, stored raw (they are 99.8% zeros
+      // and delta-encoding would turn those runs into alternating noise)
+      fillChunk(T, c, bm, planes, bytes.subarray(o, o + c.nCells));
       scheduleFineRefresh();
     }).catch(err => { c.loading = false; console.error(err); });
   }
@@ -693,12 +737,15 @@ function scheduleFineRefresh() {
   }, 150);
 }
 
-/* res-3 monthly series: lazy in web mode (only the hover chart needs it) */
+/* res-3 monthly series + credit events: lazy in web mode (only the hover chart
+   needs either, and they share its lifecycle) */
 let pendingChart = null;
 function loadSeries() {
   fetchBytes(WEB.files.series.name).then(bytes => {
-    R3.series = undelta16(new Uint16Array(bytes.buffer));
-    if (pendingChart) drawRegionChart(pendingChart.r3i, pendingChart.cellNow);
+    const sec = mkSections(bytes, WEB.files.series.manifest);
+    R3.series = sec.u16("r3series");
+    setCr3History(sec);
+    if (pendingChart) drawRegionChart(...pendingChart);
   }).catch(console.error);
 }
 
@@ -728,6 +775,50 @@ async function fetchCellSeries(res, cellIdx) {
   } catch (err) { console.error(err); return null; }
 }
 
+/* Locate the chunk holding a tier-global cell index (feature ids are that
+   index, so this is the inverse of cellStart + li). */
+function chunkAtCell(T, idx) {
+  const ch = T && T.chunks;
+  if (!ch) return null;
+  let lo = 0, hi = ch.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1, c = ch[mid];
+    if (idx < c.cellStart) hi = mid - 1;
+    else if (idx >= c.cellStart + c.nCells) lo = mid + 1;
+    else return c;
+  }
+  return null;
+}
+
+/* per-hex credit events (web only): the loaded chunk already carries this
+   cell's event count and the prefix sums, so the block in c<res>.bin is
+   addressable without a lookup table. Cells that never earned — 97.8% of
+   them — resolve to an empty list and make no request at all. */
+const cellCreditCache = new Map();
+async function fetchCellCredit(res, cellIdx) {
+  if (!WEB || !WEB.cred2 || !rangesOK) return null;
+  const key = res + ":" + cellIdx;
+  if (cellCreditCache.has(key)) return cellCreditCache.get(key);
+  const c = chunkAtCell(TIERS[res], cellIdx);
+  if (!c || !c.loaded || !c.k) return null;
+  const li = cellIdx - c.cellStart, n = c.k[li];
+  const out = [];
+  if (n > 0) {
+    const o = c.credBase + 2 * c.koff[li];
+    try {
+      const resp = await fetch(WEB.base + "/" + WEB.cred2[res], {
+        headers: { Range: "bytes=" + o + "-" + (o + 2 * n - 1) }
+      });
+      if (resp.status !== 206) { rangesOK = false; return null; }
+      const a = new Uint8Array(await resp.arrayBuffer());
+      for (let i = 0; i + 1 < a.length; i += 2) out.push([a[i], a[i + 1]]);
+    } catch (err) { console.error(err); return null; }
+  }
+  if (cellCreditCache.size > 1000) cellCreditCache.clear();
+  cellCreditCache.set(key, out);
+  return out;
+}
+
 /* --- H3 id reconstruction (mirrors child_id() in 06_viz.R, self-tested there
    against h3jsr; H3 v4 bit layout is fixed) -------------------------------- */
 const HEX = "0123456789abcdef";
@@ -749,6 +840,13 @@ const dec = {
   credit4: t => t * t * S.credit4.max,
   credit5: t => t * t * S.credit5.max,
   credit6: t => t * t * S.credit6.max
+};
+/* Credit-history levels are 1..255 with no NA slot — a month is only listed
+   when it was paid — against the tier's all-months maximum, so a hex that
+   peaked years ago is not pinned to the current month's range. */
+const credHist = (res, lev) => {
+  const t = lev / 255;
+  return t * t * S["credit" + res + "h"].max;
 };
 const sumFmt = v => "Σ " + (v >= 10 ? v.toFixed(0) : v.toFixed(2));
 const fmt = {
@@ -1220,6 +1318,7 @@ const rp = {
   h3: document.getElementById("rp-h3"),
   metrics: document.getElementById("rp-metrics"),
   chart: document.getElementById("rp-chart"),
+  cred: document.getElementById("rp-cred"),
   note: document.getElementById("rp-note")
 };
 document.getElementById("rp-close").addEventListener("click", unpinRegion);
@@ -1266,14 +1365,19 @@ function showRegion(f) {
   const r3i = r3Index.get(res === 3 ? P.id : parentR3(P.id));
   const cellNow = res > 3 && P.tm >= 0 ? dec.m(P.tm) : null;
   const wantOwn = WEB && WEB.series2 && res > 3;
-  let own = wantOwn ? cellSeriesCache.get(res + ":" + f.id) : null;
-  if (wantOwn && !own) {
+  const ckey = res + ":" + f.id;
+  let own = wantOwn ? cellSeriesCache.get(ckey) : null;
+  let cred = wantOwn ? cellCreditCache.get(ckey) : null;
+  if (wantOwn && (!own || cred === undefined)) {
+    // one round trip for both: the series row and the credit block are
+    // independent ranges, so they go out together
     const seq = ++chartSeq;
-    fetchCellSeries(res, f.id).then(a => {
-      if (a && seq === chartSeq) drawRegionChart(r3i, cellNow, a);
-    });
+    Promise.all([fetchCellSeries(res, f.id), fetchCellCredit(res, f.id)])
+      .then(([a, cr]) => {
+        if (seq === chartSeq && (a || cr)) drawRegionChart(r3i, cellNow, a, cr, res);
+      });
   }
-  drawRegionChart(r3i, cellNow, own || null);
+  drawRegionChart(r3i, cellNow, own || null, cred || null, res);
   const range = META.months[0] + " … " + META.months[NM - 1];
   rp.note.textContent = (res === 3
     ? "12-month mean NO₂ (m), " + range
@@ -1317,11 +1421,29 @@ function ecXAxis(months) {
   };
 }
 
-function drawRegionChart(r3i, cellNow, ser) {
+/* Credit-payout markers sit ON the line whose credit they describe — the
+   hex's own line where we have it, the res-3 region line otherwise — so the
+   amount never needs a second y-scale. Magnitude rides the map's own credit
+   ramp, in four steps (its darkest step is chart-background dark, so the rug
+   starts one step up); the exact figures live in the tooltip and the summary
+   line under the chart, so nothing is readable by colour alone. */
+const CRED_STEPS = ["#155e56", "#27a08c", "#5fd6bd", "#c9fff1"];
+const credStep = t => CRED_STEPS[Math.min(3, Math.floor(t * 4))];
+function setCredNote(glyph, color, text) {
+  rp.cred.textContent = "";
+  if (!glyph) return;
+  const g = document.createElement("span");
+  g.textContent = glyph;
+  g.style.color = color;
+  rp.cred.append(g, " " + text);
+}
+
+function drawRegionChart(r3i, cellNow, ser, cred, res) {
   const ch = ecChart(rp.chart);
   if (!ch || r3i === undefined) return;
   if (!R3.series) {   // web mode: region series still on its way
-    pendingChart = { r3i, cellNow };
+    pendingChart = [r3i, cellNow, ser, cred, res];
+    rp.cred.textContent = "";
     ch.setOption({ graphic: [{ type: "text", left: 8, top: "middle",
       style: { text: "history loading …", fill: "#6e8489", font: "9.5px " + MONO } }] }, true);
     return;
@@ -1348,7 +1470,7 @@ function drawRegionChart(r3i, cellNow, ser) {
       }
     }
   }
-  if (!any) { ch.clear(); return; }
+  if (!any) { ch.clear(); rp.cred.textContent = ""; return; }
   if (!own && cellNow != null) {     // keep the hovered hex's marker in range
     if (cellNow < lo) lo = cellNow;
     if (cellNow > hi) hi = cellNow;
@@ -1385,16 +1507,59 @@ function drawRegionChart(r3i, cellNow, ser) {
     itemStyle: { color: "#4fd6c2" }, label: { show: false }, data: marks
   };
 
+  /* Events belong to the line they are drawn on: the hovered hex's own
+     payouts where its series is loaded, the region's otherwise. */
+  const evRes = own ? res : 3;
+  const evs = own ? cred : cr3Events(r3i);   // null: not known yet, ≠ none
+  const events = evs || [];
+  const byMonth = new Map();
+  const dots = [];
+  for (const [j, lev] of events) {
+    if (j < 0 || j >= NM) continue;
+    const v = credHist(evRes, lev);
+    byMonth.set(j, v);
+    if (lead[j] != null)
+      dots.push({ value: [j, lead[j]], amount: v,
+                  itemStyle: { color: credStep(lev / 255),
+                               borderColor: "#111a20", borderWidth: 1.2 } });
+  }
+  if (dots.length) {
+    series.push({
+      name: "credit paid", type: "scatter", data: dots, z: 4,
+      symbolSize: 5.4, animation: false, emphasis: { disabled: true }
+    });
+  }
+  /* The always-visible half of the encoding: the dots say *when* at a glance,
+     this line says how often and how much in figures, so neither the count nor
+     the peak is readable only by colour or only on hover. */
+  const credFmt = v => fmt["credit" + evRes](v);
+  const whose = own || res === 3 ? "" : " (region)";
+  if (!evs) {
+    setCredNote("", "", "");
+  } else if (events.length) {
+    let best = events[0];
+    for (const e of events) if (e[1] > best[1]) best = e;
+    setCredNote("⬢", CRED_STEPS[2],
+      "paid " + events.length + "/" + NM + " mo · peak " +
+      credFmt(credHist(evRes, best[1])) + " " +
+      monthName(META.months[best[0]]) + whose);
+  } else {
+    setCredNote("⬡", "#6e8489", "never paid in " + NM + " mo" + whose);
+  }
+
   ch.setOption({
     animation: false,
     grid: { left: 1, right: 40, top: 5, bottom: 15 },
     tooltip: ecTooltip(ps => {
-      const rows = ps.filter(p => p.value != null);
+      const rows = ps.filter(p => p.value != null && p.seriesName !== "credit paid");
       if (!rows.length) return "";
       let s = rows[0].axisValue;
       for (const p of rows) {
         s += "<br>" + p.marker + (rows.length > 1 ? p.seriesName + "&nbsp; " : "") + fmt.m(p.value);
       }
+      const paid = byMonth.get(rows[0].dataIndex);
+      if (paid !== undefined)
+        s += "<br><span style=\"color:#5fd6bd\">⬢</span> credit&nbsp; " + credFmt(paid);
       return s;
     }),
     xAxis: ecXAxis(META.months),
@@ -1566,6 +1731,9 @@ const inLng = (lo, w, e) =>
   (lo >= w && lo <= e) || (lo + 360 >= w && lo + 360 <= e) ||
   (lo - 360 >= w && lo - 360 <= e);
 
+/* mean H3 hexagon area, for the note that explains what a Σ row covers */
+const TIER_KM2 = { 4: "1,770", 5: "253" };
+
 function updateTopRegions() {
   if (!R3) return;   // scope toggle clicked before the core data arrived
   const b = map.getBounds();
@@ -1577,12 +1745,21 @@ function updateTopRegions() {
   tb.textContent = "";
 
   /* per-cell credit history isn't shipped, so the windowed scopes stay
-     regional at every zoom; only the month scope switches to cells */
-  if (topScope === "month" && displayRes() === 6) {
-    /* --- individual cells in view (res-6 tier active) --------------------- */
+     regional at every zoom. In the month scope the list follows whichever
+     fine tier the map is drawing: res-4/5/6 each ship a current-month credit
+     plane, so all three can be listed — and, crucially, flown to at their own
+     zoom instead of dropping the reader back out to res-3. */
+  const r = displayRes();
+  if (topScope === "month" && r >= 4) {
+    /* --- individual hexes of the active fine tier, in view ---------------- */
+    const T = TIERS[r];
+    if (!T.chunks && !tierReady(r)) {   // t4/t5 still fetching; refresh queued
+      tb.appendChild(topEmpty("loading…"));
+      return;
+    }
     /* loaded chunks only — updateFine is already fetching the missing ones */
-    const T = TIERS[6], PAD = 1.0;
-    const cand = [];   // [credit, lat, lng]
+    const PAD = 1.0, credit = dec["credit" + r];
+    const cand = [];   // [credit, lat, lng, id]
     for (let j = 0; j < NP; j++) {
       const la3 = r3Lat[j];
       if (la3 < s - PAD || la3 > n + PAD) continue;
@@ -1598,26 +1775,33 @@ function updateTopRegions() {
         for (let bit = 0; bit < 8; bit++) {
           if (!(v >> bit & 1)) continue;
           if (c.tc[li] > 1) {   // level 1 = credit 0; >1 = paid credit
-            const id = childId(parent, 6, by * 8 + bit);
+            const id = childId(parent, r, by * 8 + bit);
             const [la, lo] = h3.cellToLatLng(id);
             if (la >= s && la <= n && inLng(lo, w, e))
-              cand.push([dec.credit6(lev2t8(c.tc[li])), la, lo, id]);
+              cand.push([credit(lev2t8(c.tc[li])), la, lo, id]);
           }
           li++;
         }
       }
     }
     cand.sort((a, z) => z[0] - a[0]);
-    title.textContent = "Top cells — in view";
-    note.textContent = "% = the cell’s paid credit this month (undercut of " +
-      "its own 5-year baseline × neighbourhood weight). Click → to fly.";
+    /* res-6 carries a cell's own undercut (a %); res-4/5 sum their res-6
+       children, so those rows read like the regional ones — Σ, as at res-3 */
+    title.textContent = r === 6 ? "Top cells — in view" : "Top areas — in view";
+    note.textContent = r === 6
+      ? "% = the cell’s paid credit this month (undercut of its own 5-year " +
+        "baseline × neighbourhood weight). Click → to fly."
+      : "Σ = paid credit summed over the res-6 cells of a ~" + TIER_KM2[r] +
+        " km² area this month. Zoom in for individual cells. Click → to fly.";
     cand.slice(0, 10).forEach(([cr, la, lo, id], i) => {
       tb.appendChild(topRow(i, [
         ["rk", String(i + 1)], ["", fmtCoord(la, lo)],
-        ["cr", (cr * 100).toFixed(1) + "%"]
-      ], la, lo, 9.2, id));
+        ["cr", fmt["credit" + r](cr)]
+      ], la, lo, HEX_ZOOM[r], id));
     });
-    if (cand.length === 0) tb.appendChild(topEmpty("no credited cells in view"));
+    if (cand.length === 0)
+      tb.appendChild(topEmpty(r === 6 ? "no credited cells in view"
+                                      : "no credited areas in view"));
     return;
   }
 

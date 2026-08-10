@@ -126,7 +126,22 @@ trend panel — and full-coverage res-4/5/6 tiers as you zoom in (~0.3M /
 credit. No per-cell ids, coordinates or geometry are shipped: each tier is
 a per-res-3-parent occupancy bitmap plus delta-encoded quantized metric
 planes, and the browser reconstructs H3 ids and hexagon outlines for the
-current viewport only. One template, two builds:
+current viewport only.
+
+The trend panel also marks **which months the hovered hex was actually paid
+credit in**, and how much, as dots on the line itself — colour steps up the
+map's credit ramp, with the count and the peak in figures under the chart and
+the exact month value on hover. 98%+ of hex-months earn nothing, so this
+ships as *events*, not as a per-month plane: one `(month, level)` byte pair
+per payout. res-3 events are a flat sorted key list in `series.bin` (both
+builds); res-4/5/6 events live in `c<r>.bin` and are addressed by a per-cell
+count plane carried inside the tier's own gzipped planes — the client
+prefix-sums it, so no offset table is stored or shipped. That keeps the whole
+feature under 1% of the bundle. The finer tiers are web-only, like the
+per-hex `m` series they annotate; in the single-file build a hex below res 3
+shows its region's payouts, marked `(region)`.
+
+One template, two builds:
 
 * **`data/viz/index.html`** — single file, everything zlib-compressed and
   base64-embedded (~47 MB). For the network share, where no HTTP server
@@ -137,9 +152,11 @@ current viewport only. One template, two builds:
   chunk, viewport-driven). Every `.bin` has a precompressed `.gz` sibling
   the host serves directly (`gzip_static` on nginx, `precompressed gzip` on
   Caddy); `data/<month>/` paths are immutable, so far-future cache headers
-  apply, while `index.html` stays `no-cache`. The per-hex series files
-  (`s4/s5/s6.bin`) are read with HTTP range requests, so the host has to
-  answer 206. Deploy with `scripts/08_deploy.sh` (config for both servers
+  apply, while `index.html` stays `no-cache`. The per-hex series and credit
+  files (`s4/s5/s6.bin`, `c4/c5/c6.bin`) are read with HTTP range requests,
+  so the host has to answer 206 — and they are the only `.bin`s without a
+  `.gz` sibling, since a range into a precompressed file is meaningless.
+  Deploy with `scripts/08_deploy.sh` (config for both servers
   in its header; the reference deployment runs Caddy). Only the newest month
   is ever referenced, so build and deploy each keep the newest few bundles
   (`VIZ_KEEP_MONTHS` / `KEEP_MONTHS`, default 2 — the second for rollback)
@@ -148,9 +165,13 @@ current viewport only. One template, two builds:
   planes rebuilds from the panel.
 
 Both `run_all.R` and the deploy script gate on `scripts/09_smoketest.js`: it
-serves `data/viz/web/` locally and drives it in headless Chrome — hover /
-pin / release, hex and viewport deep links, chart instances, zero page
-errors — once with a hover-capable pointer and once as a touch device.
+serves `data/viz/web/` locally and drives it in headless Chrome — hover / pin
+/ release, hex and viewport deep links, chart instances, zero page errors —
+once with a hover-capable pointer and once as a touch device. A third run
+walks the top-regions panel: all three credit windows, and at every tier the
+map draws (res 3/4/5/6) that the list follows that tier, that `→` flies to a
+hex of *that* resolution instead of dropping back to res-3, and that the
+hex's credit-payout markers are drawn and agree with the summary line.
 Needs `npm install` (puppeteer-core) and a Chrome under `~/.cache/puppeteer`
 or `PUPPETEER_EXECUTABLE_PATH`; `SKIP_SMOKE=1` bypasses the deploy gate.
 

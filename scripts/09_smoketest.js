@@ -7,11 +7,14 @@
  * deep links arriving at a zoom where the hex renders, and the region panel
  * resizing when the pin chip disappears.
  *
- * Two runs from one suite:
- *   desktop — Chrome forced to report a hover-capable mouse pointer
- *             (headless defaults to hover:none): hover previews, click pins,
- *             the ⌖ chip releases without hiding or resizing the panel;
- *   touch   — default headless (hover:none): tap pins, × dismisses.
+ * Three runs from one suite:
+ *   desktop     — Chrome forced to report a hover-capable mouse pointer
+ *                 (headless defaults to hover:none): hover previews, click
+ *                 pins, the ⌖ chip releases without hiding or resizing the
+ *                 panel, hex and viewport deep links;
+ *   top regions — the three credit-window scopes, and → flying to a hex in
+ *                 every tier the map draws without leaving that tier;
+ *   touch       — default headless (hover:none): tap pins, × dismisses.
  *
  * Needs: npm install (puppeteer-core), a Chrome under ~/.cache/puppeteer
  * (or PUPPETEER_EXECUTABLE_PATH), and internet for the CDN map libraries.
@@ -155,6 +158,15 @@ async function desktopRun(browser, base) {
       !!echarts.getInstanceByDom(document.getElementById(id)))),
     "three live ECharts instances");
 
+  /* The credit line waits on series.bin / a range request, and it changes the
+     panel's height when it lands. Settle it before measuring heights below,
+     or the release assertion races the fetch. */
+  await page.waitForFunction("document.getElementById('rp-cred').textContent !== ''",
+                             { timeout: 30000 });
+  ok(/^[⬢⬡] (paid \d+\/\d+ mo · peak |never paid in \d+ mo)/u
+       .test(await $text(page, "#rp-cred")),
+     "credit history line reads “" + (await $text(page, "#rp-cred")) + "”");
+
   // click pins; ⌖ chip visible, × hidden on hover devices
   await page.mouse.click(hex.x, hex.y);
   st = await panelState(page);
@@ -209,6 +221,137 @@ async function desktopRun(browser, base) {
   await vw.page.close();
 }
 
+/* --- Top-regions run: the scope toggle, and → keeping you in your tier ------- */
+/* Two things this guards. The trailing-12/all-time scope had no assertion at
+   all. And the list used to fall back to res-3 rows whenever the map drew
+   res-4 or res-5, so → flew the reader clean out of the tier they were reading
+   (always zoom 4.8) instead of to the hex they had clicked on. */
+const TIER_ZOOM = [[4, 5.6], [5, 6.8], [6, 9.2]];
+const TIER_TITLE = { 4: "Top areas — in view", 5: "Top areas — in view",
+                     6: "Top cells — in view" };
+
+const topState = page => page.evaluate(() => {
+  const m = /[0-9a-f]{15}/.exec(document.getElementById("rp-h3").textContent);
+  const ec = window.echarts && echarts.getInstanceByDom(document.getElementById("rp-chart"));
+  const ser = ec ? (ec.getOption().series || []) : [];
+  const paid = ser.find(s => s.name === "credit paid");
+  return {
+    res: displayRes(), zoom: window._keanoMap.getZoom(),
+    title: document.getElementById("top-title").textContent,
+    note: document.getElementById("top-note").textContent,
+    rows: document.querySelectorAll("#top-table button.loc").length,
+    pinned: document.getElementById("region-panel").classList.contains("pinned"),
+    pinnedRes: m ? h3.getResolution(m[0]) : null,
+    cred: document.getElementById("rp-cred").textContent,
+    credDots: paid ? paid.data.length : 0,
+    scope: [...document.querySelectorAll("#scope-buttons button")]
+             .find(b => b.getAttribute("aria-pressed") === "true")?.textContent
+  };
+});
+
+/* The top-ranked hex of a tier earned credit by construction, so its chart
+   must carry markers, and the count in the summary line must be consistent
+   with the number of dots drawn (a credited month with no m value on the line
+   has nowhere to sit, so dots ≤ paid months). */
+function okCreditMarkers(st, label) {
+  const m = /^⬢ paid (\d+)\/(\d+) mo · peak /u.exec(st.cred);
+  ok(!!m, label + " credit summary reads “" + st.cred + "”");
+  if (!m) return;
+  ok(st.credDots > 0 && st.credDots <= +m[1],
+     label + " draws " + st.credDots + " marker(s) for " + m[1] + " paid month(s)");
+}
+
+/* Wait out the debounced refresh: a zoom into a new tier fetches t4/t5 or res-6
+   chunks, and the table only fills once they land (scheduleFineRefresh). */
+const settleTop = page =>
+  page.waitForFunction(() => document.querySelector("#top-table button.loc"),
+                       { timeout: 30000 }).catch(() => {});
+
+async function zoomTo(page, zoom) {
+  await page.evaluate(z => new Promise(r => {
+    window._keanoMap.once("moveend", r);
+    window._keanoMap.setZoom(z);
+  }), zoom);
+  await settleTop(page);
+}
+
+/* Click → on row 1 and report where it put us. Releases any existing pin first
+   so "pinned" is unambiguously the arrival of *this* flight. */
+async function flyFirstRow(page) {
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(
+    () => !document.getElementById("region-panel").classList.contains("pinned"),
+    { timeout: 5000 }).catch(() => {});
+  await page.evaluate(() => document.querySelector("#top-table button.loc").click());
+  await page.waitForFunction(
+    () => !window._keanoMap.isMoving() &&
+          document.getElementById("region-panel").classList.contains("pinned") &&
+          document.getElementById("rp-cred").textContent !== "",
+    { timeout: 20000 }).catch(() => {});
+  await settleTop(page);
+  return topState(page);
+}
+
+async function topRegionsRun(browser, base) {
+  console.log("top regions (credit scopes + fly-to per tier):");
+  const { page, errors } = await newPage(browser, base);
+
+  const scopes = await page.$$eval("#scope-buttons button", bs => bs.map(b => b.textContent));
+  ok(scopes.length === 3, "three credit windows offered (" + scopes.join(" / ") + ")");
+
+  /* Every scope fills the table, labels itself, and marks its own button. The
+     windowed scopes stay res-3 by design — per-cell credit history isn't
+     shipped — so they must say "Top regions" at any zoom. */
+  for (let i = scopes.length - 1; i >= 0; i--) {
+    await page.evaluate(n => document.querySelectorAll("#scope-buttons button")[n].click(), i);
+    await settleTop(page);
+    const st = await topState(page);
+    ok(st.scope === scopes[i], "scope “" + scopes[i] + "” is the pressed button");
+    ok(st.rows > 0, "scope “" + scopes[i] + "” lists " + st.rows + " row(s), each with a →");
+    if (i > 0) ok(st.title.startsWith("Top regions"),
+                  "windowed scope “" + scopes[i] + "” stays regional (" + st.title + ")");
+  }
+
+  /* Park on the highest-credit region on the planet, then walk down the tiers.
+     Descending via → keeps the viewport centred on credited ground, so each
+     tier has something to list. */
+  let st = await flyFirstRow(page);
+  ok(st.res === 3 && st.pinnedRes === 3,
+     "→ on a res-3 region arrives in the res-3 tier on a res-3 hex");
+  okCreditMarkers(st, "res-3");
+  ok(!st.cred.includes("(region)"),
+     "res-3 credit is the region's own, not borrowed");
+
+  for (const [res, zoom] of TIER_ZOOM) {
+    await zoomTo(page, zoom);
+    st = await topState(page);
+    ok(st.res === res, "zoom " + zoom + " draws the res-" + res + " tier");
+    ok(st.title === TIER_TITLE[res],
+       "res-" + res + " list titles itself “" + st.title + "”");
+    /* wording has to distinguish the tiers, not just be present: the res-3
+       note also carries a Σ and a km² figure ("region", not "area") */
+    ok(st.note.includes(res === 6 ? "5-year baseline" : "km² area"),
+       "res-" + res + " note explains " + (res === 6 ? "a per-cell %" : "a Σ over children"));
+    ok(st.rows > 0, "res-" + res + " lists " + st.rows + " credited hex(es) in view");
+    if (!st.rows) continue;
+
+    const flown = await flyFirstRow(page);
+    ok(flown.res === res,
+       "→ on a res-" + res + " row stays in the res-" + res + " tier (zoom " +
+       flown.zoom.toFixed(2) + ")");
+    ok(flown.pinned && flown.pinnedRes === res,
+       "→ pins the res-" + res + " hex it flew to" +
+       (flown.pinnedRes ? "" : " (nothing pinned)"));
+    okCreditMarkers(flown, "res-" + res);
+    ok(!flown.cred.includes("(region)"),
+       "res-" + res + " credit is the hex's own, not its region's");
+  }
+
+  ok(errors.length === 0, "no page errors / failed local requests" +
+     (errors.length ? " — " + errors.join("; ") : ""));
+  await page.close();
+}
+
 /* --- Touch run (default headless: hover:none) -------------------------------- */
 async function touchRun(browser, base) {
   console.log("touch (hover: none):");
@@ -245,6 +388,7 @@ async function touchRun(browser, base) {
   const base = "http://127.0.0.1:" + srv.address().port + "/index.html";
 
   for (const [label, args, run] of [["desktop", [HOVER_FLAG], desktopRun],
+                                    ["top regions", [HOVER_FLAG], topRegionsRun],
                                     ["touch", [], touchRun]]) {
     /* defaultViewport:null — Puppeteer's viewport emulation (CDP
        setDeviceMetricsOverride) silently resets the pointer/hover media back

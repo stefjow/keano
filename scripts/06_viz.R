@@ -28,6 +28,10 @@ months_all = months_in_dataset(DATA_PANEL)
 latest = max(months_all)
 nm = length(months_all)
 win12 = tail(months_all, 12L)   # trailing-12 window for the top-list scope toggle
+# Credit-history events store their month as a u8 index into months_all, so the
+# archive may not outgrow that before the encoding widens (21 years of monthly
+# data away — the check is here so it fails at build time, not in a browser).
+stopifnot(nm <= 255L)
 message("Rendering hexagon map for ", latest, " (", nm, " months of history)")
 
 # --- H3 id arithmetic on the 15-char hex strings ------------------------------
@@ -88,7 +92,7 @@ do_shard = function(s) {
     filter(shard == s) |> select(cell_id, month, m, credit) |> collect() |>
     as.data.table()
   if (nrow(hist) == 0) return(NULL)
-  hist[ce, r3 := i.r3, on = "cell_id"]
+  hist[ce, `:=`(r3 = i.r3, path = i.path), on = "cell_id"]
   ser = hist[is.finite(m), .(sum_m = sum(m), n_m = .N), by = .(r3, month)]
   # paid credit summed over the trailing-12 / all-time windows, with the
   # number of distinct cells that earned in each window
@@ -99,6 +103,19 @@ do_shard = function(s) {
     credit_a = sum(credit),
     n_cr_a   = uniqueN(cell_id)
   ), by = r3]
+  # Monthly credit history, for the "when was this hex paid" chart markers.
+  # Only res-3 is aggregated here (it is the one tier both builds carry); the
+  # finer tiers are built alongside their per-hex m series in do_series_shard.
+  # The per-tier maxima the history levels quantize against have to be global,
+  # so they are reduced across shards before that second pass runs. Grouping
+  # only `paid` keeps this cheap — 0.2-0.5% of rows carry any credit.
+  crh3 = paid[, .(cr = sum(credit)), by = .(r3, month)]
+  mx = function(v) if (!length(v)) 0 else max(v)
+  crmax = c(
+    r3 = mx(crh3$cr),
+    r4 = mx(paid[, .(v = sum(credit)), by = .(r3, p = path %/% 64L, month)]$v),
+    r5 = mx(paid[, .(v = sum(credit)), by = .(r3, p = path %/% 8L,  month)]$v),
+    r6 = mx(paid$credit))
   rm(hist, paid)
 
   last = open_dataset(DATA_METRICS) |>
@@ -123,7 +140,8 @@ do_shard = function(s) {
 
   fine = last[is.finite(m),
               .(r3, path, m, perf_short, perf_long, credit, elig)]
-  list(ser = ser, r3last = r3last, fine = fine, crwin = crwin)
+  list(ser = ser, r3last = r3last, fine = fine, crwin = crwin,
+       crh3 = crh3, crmax = crmax)
 }
 
 # PSOCK, not fork (see script 03): arrow used pre-fork deadlocks in children
@@ -146,6 +164,9 @@ ser    = rbindlist(lapply(res, `[[`, "ser"))
 r3last = rbindlist(lapply(res, `[[`, "r3last"))
 fine   = rbindlist(lapply(res, `[[`, "fine"))
 crwin  = rbindlist(lapply(res, `[[`, "crwin"))
+crh3   = rbindlist(lapply(res, `[[`, "crh3"))
+# elementwise max over the per-shard maxima: one global scale per tier
+crmax_h = do.call(pmax, lapply(res, `[[`, "crmax"))
 rm(res)
 
 # --- res-3 alignment + res-4/5 aggregates -------------------------------------
@@ -208,6 +229,17 @@ cr6_max = cr_max(fine$credit)
 t_m   = function(v) clamp01((log10(pmax(v, 1e-6)) - lmin) / (lmax - lmin))
 t_sym = function(v, s) clamp01((v / s + 1) / 2)
 t_cr  = function(v, hi) sqrt(clamp01(v / hi))
+
+# Credit-history maxima: the same sqrt scale, but taken over every month
+# rather than the latest one, so the chart markers of a hex that peaked years
+# ago are not all pinned at the top of the current month's range.
+crh_max = vapply(c("r3", "r4", "r5", "r6"),
+                 function(k) if (crmax_h[[k]] > 0) crmax_h[[k]] else 1, 0)
+# Levels 1..255, no 0 = NA slot: a month is only listed when it was paid, so
+# the smallest storable credit is level 1, not "no data". Decoded client-side
+# as (lev/255)^2 * max.
+lev_crh = function(v, hi)
+  pmax(1L, pmin(255L, as.integer(round(sqrt(clamp01(v / hi)) * 255))))
 
 # --- Binary container ---------------------------------------------------------
 # Sections are quantized levels (0 = NA), delta-encoded so that the smooth
@@ -272,6 +304,19 @@ add_sec("cr3a", raw_bin(as.numeric(fifelse(is.na(crwin$credit_a), 0,
                                            crwin$credit_a)), 4L))
 add_sec("nc3a", raw_bin(fifelse(is.na(crwin$n_cr_a), 0L, crwin$n_cr_a), 2L))
 
+# res-3 credit history as a flat event list: one (cell, month) key plus one
+# level per month that was actually paid. 99%+ of hex-months earn nothing, so
+# events cost a fraction of a dense per-month plane. Keys are sorted, so the
+# client binary-searches a cell's block instead of building an index.
+crh3 = crh3[cr > 0]
+crh3[, `:=`(i = chmatch(r3, r3_ids), j = chmatch(month, months_all))]
+crh3 = crh3[!is.na(i) & !is.na(j)]
+setorder(crh3, i, j)
+add_sec("cr3hk", raw_bin((crh3$i - 1L) * nm + (crh3$j - 1L), 4L))
+add_sec("cr3hv", as.raw(lev_crh(crh3$cr, crh_max[["r3"]])))
+message("Credit history: ", format(nrow(crh3), big.mark = ","),
+        " res-3 events (", round(100 * nrow(crh3) / (nP * nm), 2), "% of hex-months)")
+
 tier_sec = function(r, tt, key, B, crmax) {
   add_sec(paste0("bm", r), bitmap_raw(tt$r3i, key, B))
   add_sec(paste0("tm", r), delta_u8(lev_u8(t_m(tt$m))))
@@ -320,7 +365,12 @@ meta = list(
   scales = list(m = list(lmin = lmin, lmax = lmax),
                 yoy = list(sym = sym_y), trend = list(sym = sym_t),
                 credit3 = list(max = cr3_max), credit4 = list(max = cr4_max),
-                credit5 = list(max = cr5_max), credit6 = list(max = cr6_max)),
+                credit5 = list(max = cr5_max), credit6 = list(max = cr6_max),
+                # history maxima, for the chart's credit-payout markers
+                credit3h = list(max = crh_max[["r3"]]),
+                credit4h = list(max = crh_max[["r4"]]),
+                credit5h = list(max = crh_max[["r5"]]),
+                credit6h = list(max = crh_max[["r6"]])),
   nP = nP,
   n = list(`4` = nrow(t4), `5` = nrow(t5), `6` = nrow(fine)),
   series_global = series_global,
@@ -360,41 +410,36 @@ write_bin_gz = function(r, path) {
   writeBin(r, con); close(con)
   invisible(length(r))
 }
-concat_file = function(names) {
+# Takes a named list of raw vectors, so a web file can mix embedded sections
+# with web-only planes (the fine-tier credit counts, built further down).
+concat_raw = function(lst) {
   man = list(); off = 0
-  for (nm in names) {
-    man[[length(man) + 1L]] = list(nm, off, length(sections[[nm]]))
-    off = off + length(sections[[nm]])
+  for (k in names(lst)) {
+    man[[length(man) + 1L]] = list(k, off, length(lst[[k]]))
+    off = off + length(lst[[k]])
   }
-  list(bin = do.call(c, unname(sections[names])), manifest = man)
+  list(bin = do.call(c, unname(lst)), manifest = man)
 }
+concat_file = function(names) concat_raw(sections[names])
 core = concat_file(c("r3ids", "tm3", "ty3", "tt3", "tc3", "cr3f", "nc3",
                      "cr3y", "nc3y", "cr3a", "nc3a"))
-t4f  = concat_file(c("bm4", "tm4", "ty4", "tt4", "tc4"))
-t5f  = concat_file(c("bm5", "tm5", "ty5", "tt5", "tc5"))
+# series.bin carries the res-3 m history and the res-3 credit events together:
+# both exist only to draw the region chart, so they share its lazy fetch.
+seriesf = concat_file(c("r3series", "cr3hk", "cr3hv"))
 write_bin_gz(core$bin, file.path(wdata, "core.bin"))
-write_bin_gz(sections$r3series, file.path(wdata, "series.bin"))
-write_bin_gz(t4f$bin, file.path(wdata, "t4.bin"))
-write_bin_gz(t5f$bin, file.path(wdata, "t5.bin"))
+write_bin_gz(seriesf$bin, file.path(wdata, "series.bin"))
 
-# res-6 planes chunked by res-1 parent. Sorted res-3 ids are contiguous
-# within a res-1 parent (lexicographic = prefix order), so every chunk is an
-# index range: [first, first + nR3) parents, their cells re-delta'd locally.
+# res-6 chunk geometry: planes chunked by res-1 parent. Sorted res-3 ids are
+# contiguous within a res-1 parent (lexicographic = prefix order), so every
+# chunk is an index range: [first, first + nR3) parents.
+# The chunks themselves are written after the series pass below, which is what
+# produces the per-cell credit-event counts they carry.
 r1 = r1_of_r3(r3_ids)
 rl = rle(r1)
 stopifnot(!anyDuplicated(rl$values))
 first = cumsum(c(1L, head(rl$lengths, -1L)))
 off6 = c(0L, cumsum(tabulate(fine$r3i, nbins = nP)))
-chunks_meta = vector("list", length(rl$lengths))
-for (k in seq_along(rl$lengths)) {
-  a = first[k]; nr = rl$lengths[k]
-  cells = if (off6[a + nr] > off6[a]) (off6[a] + 1L):off6[a + nr] else integer(0)
-  raw_k = c(sections$bm6[((a - 1L) * 64L + 1L):((a + nr - 1L) * 64L)],
-            unlist(lapply(lev6, function(v) delta_u8(v[cells])),
-                   use.names = FALSE))
-  write_bin_gz(as.raw(raw_k), file.path(wdata, sprintf("r6-%04d.bin", k - 1L)))
-  chunks_meta[[k]] = c(a - 1L, nr, length(cells))
-}
+
 # --- Per-hex monthly series (web only; fetched per cell via HTTP ranges) -----
 # s<r>.bin holds one row per tier-r hex in plane order (r3, then digit path),
 # NM u16 levels delta-encoded per row. A hex's row sits at featureId*NM*2, so
@@ -419,8 +464,21 @@ do_series_shard = function(s) {
   ce = open_dataset(file.path(DATA_LOOKUP, "cells.parquet")) |>
     filter(shard == s) |> select(cell_id, h3) |> collect() |> as.data.table()
   ce[, `:=`(r3 = parent_r3(h3), path = path_r6(h3), h3 = NULL)]
+  # Credit events for a tier, written as (monthIdx u8, level u8) pairs in row
+  # order plus one u8 count per row. The count plane rides the tier's gzipped
+  # plane file; the client prefix-sums it to find a row's block in c<r>.bin,
+  # so no per-row offset has to be stored anywhere.
+  write_events = function(ev, nrows, r) {
+    cnt = tabulate(ev$i, nbins = nrows)
+    # nm <= 255 is checked globally, so a row cannot exceed 255 events either
+    stopifnot(length(cnt) == nrows, max(c(0L, cnt)) <= 255L)
+    writeBin(as.raw(cnt), file.path(wdata, sprintf(".k%d-%s.tmp", r, s)))
+    writeBin(if (nrow(ev)) as.raw(rbind(ev$j - 1L, ev$lev)) else raw(0),
+             file.path(wdata, sprintf(".c%d-%s.tmp", r, s)))
+  }
+
   hist = open_dataset(DATA_METRICS) |>
-    filter(shard == s) |> select(cell_id, month, m) |> collect() |>
+    filter(shard == s) |> select(cell_id, month, m, credit) |> collect() |>
     as.data.table()
   hist = hist[is.finite(m)]
   if (nrow(hist) == 0) return(NULL)
@@ -436,6 +494,8 @@ do_series_shard = function(s) {
   setorder(rows, r3, path)
   rows[, i := .I]
   hist[rows, i6 := i.i, on = "cell_id"]
+  # after i6 exists: the res-6 events are indexed by it
+  paid = hist[!is.na(credit) & credit > 0]
   v = integer(nrow(rows) * nm)
   sub = hist[!is.na(i6)]
   v[(sub$i6 - 1L) * nm + sub$j] = lev16(sub$m)
@@ -446,9 +506,13 @@ do_series_shard = function(s) {
   chk[smp$j] = lev16(smp$m)
   stopifnot(identical(chk, v[(k - 1L) * nm + seq_len(nm)]))
   write_rows(v, nrow(rows), file.path(wdata, sprintf(".s6-%s.tmp", s)))
+  # res-6 credit is the cell's own paid undercut, so events map 1:1 to rows
+  ev6 = paid[!is.na(i6), .(i = i6, j, lev = lev_crh(credit, crh_max[["r6"]]))]
+  setorder(ev6, i, j)
+  write_events(ev6, nrow(rows), 6L)
   counts[3] = nrow(rows)
   bounds = c(rows$r3[1], rows$r3[nrow(rows)])
-  rm(v, sub)
+  rm(v, sub, ev6)
 
   # res 4/5: mean of children m per month, rows = groups present at latest
   for (spec in list(list(r = 4L, div = 64L), list(r = 5L, div = 8L))) {
@@ -461,8 +525,16 @@ do_series_shard = function(s) {
     v = integer(nrow(rws) * nm)
     v[(g$ig - 1L) * nm + g$j] = g$lev
     write_rows(v, nrow(rws), file.path(wdata, sprintf(".s%d-%s.tmp", spec$r, s)))
+    # credit at res 4/5 is the sum over the group's res-6 children, matching
+    # how their tc planes and the top-list Σ rows are built
+    gc = paid[, .(cr = sum(credit)), by = .(r3, p = path %/% spec$div, j)]
+    gc[rws, ig := i.i, on = c("r3", "p")]
+    gc = gc[!is.na(ig)]
+    ev = gc[, .(i = ig, j, lev = lev_crh(cr, crh_max[[paste0("r", spec$r)]]))]
+    setorder(ev, i, j)
+    write_events(ev, nrow(rws), spec$r)
     counts[spec$r - 3L] = nrow(rws)
-    rm(v, g)
+    rm(v, g, gc, ev)
   }
   list(shard = s, n = counts, r3_first = bounds[1], r3_last = bounds[2])
 }
@@ -470,6 +542,7 @@ do_series_shard = function(s) {
 cl = makeCluster(max(1L, min(N_WORKERS, length(shards))), outfile = "")
 clusterExport(cl, c("do_series_shard", "parent_r3", "path_r6", "months_all",
                     "latest", "nm", "lmin", "lmax", "wdata",
+                    "lev_crh", "crh_max", "clamp01",
                     "DATA_METRICS", "DATA_LOOKUP"))
 invisible(clusterEvalQ(cl, suppressMessages({
   library(data.table); library(arrow); library(dplyr)
@@ -490,29 +563,78 @@ stopifnot(
   sum(vapply(res, function(x) x$n[2], 1L)) == nrow(t5),
   sum(vapply(res, function(x) x$n[1], 1L)) == nrow(t4),
   !is.unsorted(unlist(lapply(res, function(x) c(x$r3_first, x$r3_last)))))
-for (r in 4:6) {
-  target = file.path(wdata, sprintf("s%d.bin", r))
+shard_order = vapply(res, `[[`, "", "shard")
+join_parts = function(pattern, target) {
   unlink(target)
-  parts = file.path(wdata, sprintf(".s%d-%s.tmp", r,
-                                   vapply(res, `[[`, "", "shard")))
+  parts = file.path(wdata, sprintf(pattern, shard_order))
   file.create(target)
   stopifnot(file.append(target, parts))
   unlink(parts)
+  target
 }
-stopifnot(file.size(file.path(wdata, "s6.bin")) == nrow(fine) * nm * 2)
+for (r in 4:6) {
+  join_parts(sprintf(".s%d-%%s.tmp", r), file.path(wdata, sprintf("s%d.bin", r)))
+  # c<r>.bin: the credit-event pairs, concatenated in the same row order as
+  # the series rows, so a row's block is addressed by the running total of the
+  # count plane — nothing per-row has to be stored.
+  join_parts(sprintf(".c%d-%%s.tmp", r), file.path(wdata, sprintf("c%d.bin", r)))
+}
+kplane = function(r, nrows) {
+  f = join_parts(sprintf(".k%d-%%s.tmp", r), file.path(wdata, sprintf(".k%d.tmp", r)))
+  k = readBin(f, "raw", n = nrows + 1L)
+  unlink(f)
+  stopifnot(length(k) == nrows)
+  k
+}
+k4 = kplane(4L, nrow(t4)); k5 = kplane(5L, nrow(t5)); k6 = kplane(6L, nrow(fine))
+# 2 bytes per event; the client prefix-sums within a chunk from this base
+cum6 = c(0, cumsum(as.numeric(as.integer(k6))))
+stopifnot(file.size(file.path(wdata, "s6.bin")) == nrow(fine) * nm * 2,
+          2 * cum6[nrow(fine) + 1L] == file.size(file.path(wdata, "c6.bin")),
+          2 * sum(as.integer(k4)) == file.size(file.path(wdata, "c4.bin")),
+          2 * sum(as.integer(k5)) == file.size(file.path(wdata, "c5.bin")))
 message("Per-hex series: ",
         paste(sprintf("s%d.bin %.0f MB", 4:6,
                       file.size(file.path(wdata, sprintf("s%d.bin", 4:6))) / 2^20),
               collapse = ", "))
+message("Per-hex credit: ",
+        paste(sprintf("c%d.bin %.1f MB", 4:6,
+                      file.size(file.path(wdata, sprintf("c%d.bin", 4:6))) / 2^20),
+              collapse = ", "),
+        sprintf(" (%s events)", format(cum6[nrow(fine) + 1L] +
+                                       sum(as.integer(k4)) + sum(as.integer(k5)),
+                                       big.mark = ",")))
+
+# --- Tier files + res-6 chunks (they carry the credit-count planes) -----------
+t4f = concat_raw(c(sections[c("bm4", "tm4", "ty4", "tt4", "tc4")], list(k4 = k4)))
+t5f = concat_raw(c(sections[c("bm5", "tm5", "ty5", "tt5", "tc5")], list(k5 = k5)))
+write_bin_gz(t4f$bin, file.path(wdata, "t4.bin"))
+write_bin_gz(t5f$bin, file.path(wdata, "t5.bin"))
+
+# Counts are stored raw, not delta-encoded: 99.8% of them are zero, and
+# delta-ing that turns a long run of zeros into alternating noise.
+chunks_meta = vector("list", length(rl$lengths))
+for (k in seq_along(rl$lengths)) {
+  a = first[k]; nr = rl$lengths[k]
+  cells = if (off6[a + nr] > off6[a]) (off6[a] + 1L):off6[a + nr] else integer(0)
+  raw_k = c(sections$bm6[((a - 1L) * 64L + 1L):((a + nr - 1L) * 64L)],
+            unlist(lapply(lev6, function(v) delta_u8(v[cells])),
+                   use.names = FALSE))
+  write_bin_gz(c(as.raw(raw_k), k6[cells]),
+               file.path(wdata, sprintf("r6-%04d.bin", k - 1L)))
+  # 4th element: byte offset of this chunk's first credit event in c6.bin
+  chunks_meta[[k]] = c(a - 1L, nr, length(cells), 2 * cum6[off6[a] + 1L])
+}
 
 meta_web = meta
 meta_web$web = list(
   base = paste0("data/", latest),
   files = list(core = list(name = "core.bin", manifest = core$manifest),
-               series = list(name = "series.bin"),
+               series = list(name = "series.bin", manifest = seriesf$manifest),
                t4 = list(name = "t4.bin", manifest = t4f$manifest),
                t5 = list(name = "t5.bin", manifest = t5f$manifest)),
   series2 = list(`4` = "s4.bin", `5` = "s5.bin", `6` = "s6.bin"),
+  cred2 = list(`4` = "c4.bin", `5` = "c5.bin", `6` = "c6.bin"),
   r6 = chunks_meta
 )
 splice(meta_web, "", file.path(WEB_DIR, "index.html"))

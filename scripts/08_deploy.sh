@@ -81,9 +81,15 @@ echo "Deployed to $TARGET"
 # Runs only after both rsyncs succeeded, so a failed deploy never prunes. The
 # month just deployed is excluded explicitly, on top of being newest.
 KEEP_MONTHS="${KEEP_MONTHS:-2}"
-CURRENT="$(basename "$(ls -1d "$SRC"data/*/ | sort | tail -1)")"
 
-if [[ "$KEEP_MONTHS" -gt 0 && "$TARGET" == *:* ]]; then
+# Tolerates an unmatched glob: under `set -e` a bare `ls` on an empty data/
+# would fail the script after both rsyncs had already succeeded — a red run on
+# a good deploy. With no local month there is nothing to name as current, so
+# the guard below skips rather than pruning blind.
+NEWEST="$(ls -1d "$SRC"data/*/ 2>/dev/null | sort | tail -1)"
+CURRENT="${NEWEST%/}"; CURRENT="${CURRENT##*/}"
+
+if [[ "$KEEP_MONTHS" -gt 0 && "$TARGET" == *:* && -n "$CURRENT" ]]; then
   ssh -p "$PORT" "${TARGET%%:*}" bash -s -- "${TARGET#*:}" "$KEEP_MONTHS" "$CURRENT" <<'REMOTE'
 root=$1; keep=$2; current=$3
 cd "$root/data" 2>/dev/null || exit 0

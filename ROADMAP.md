@@ -1,8 +1,48 @@
 # Roadmap notes
 
 Ideas collected 2026-08-07 after the ECharts / selection-model session,
-extended 2026-08-08 by the provenance / hardening session.
+extended 2026-08-08 by the provenance / hardening session and 2026-08-10 by
+the tier fly-to / credit-history session.
 Rough order inside each section is by value-for-effort, not commitment.
+
+## Shipped 2026-08-10
+
+### Fly-to works at every tier, not just res-3 and res-6
+`updateTopRegions()` switched to per-cell rows only at `displayRes() === 6`,
+so in the res-4 and res-5 zoom bands the panel silently fell back to res-3
+regions and `→` flew to zoom 4.8 — out of the tier the reader was in. Nothing
+was missing from the data: `childId(parent, r, …)`, `dec`/`fmt["credit"+r]`
+and `HEX_ZOOM[r]` were already generic, and `updateFine()` ran the identical
+bitmap walk over any `r`. The branch just hardcoded `6` and a literal `9.2`.
+res-4/5 rows read as Σ over their res-6 children (titled "Top areas"), res-6
+keeps its per-cell %.
+
+Closed the ROADMAP's own gap while there: the smoke test now walks all four
+tiers and all three credit windows. Run against the *old* bundle first as a
+negative control — exactly 6 failures, all and only the res-4/5 assertions,
+reporting `zoom 4.80`.
+
+### Credit-payout markers in the trend chart
+The chart showed *what* a hex's NO₂ did but never *when it got paid*, and
+per-cell credit history wasn't in the bundle at all. Measured first: only
+0.18–0.46% of hex-months carry credit (97.8% of cells never earn), so a dense
+per-month plane would have been 99.6% zeros and ~1.2 GB at res-6. Shipped as
+events instead — one `(month, level)` pair per payout, with the per-cell
+*count* riding the tier's already-gzipped planes so the client prefix-sums its
+own offsets and nothing stores an index. 6.33M events for **+26 MB, +0.95%**
+of the bundle; the first sizing estimate (a when-only bitmap) was 188 MB.
+
+Amount is encoded up the map's own credit ramp in four steps, deliberately not
+on a second y-axis — the dots sit on the line whose credit they describe, so a
+marker's height is still `m`. Count and peak are in figures under the chart
+and the exact value is on hover, so neither is readable by colour alone.
+res-3 events ship in both builds; the finer tiers are web-only like the
+per-hex `m` series they annotate, and single-file below res 3 shows the
+region's payouts, marked `(region)`.
+
+Verified both builds: single-file and web agree exactly on the res-3 top
+region (63/98 months, peak Σ 44) via two different encodings, zero page
+errors in either.
 
 ## Shipped 2026-08-08
 
@@ -143,11 +183,9 @@ follow-on. Budget the run realistically: appending a month rewrites the
 per-cell stride in the series files, so every deploy transfers ~2.7 GB no
 matter what rsync's delta algorithm does.
 
-### Smoke coverage for the top-regions scope
-`09_smoketest.js` asserts hover, pinning, deep links and chart instances,
-but nothing about the trailing-12-months / all-time scope from e3e2453 —
-the most recent UI change is the one with no assertion, and it is already
-live. Worth closing before the next change layers on top of it.
+### ~~Smoke coverage for the top-regions scope~~ — done 2026-08-10
+Closed by the tier walk above: all three credit windows are asserted, plus
+the tier the list follows and where `→` lands.
 
 ## Decisions taken (context)
 
@@ -166,6 +204,22 @@ live. Worth closing before the next change layers on top of it.
 * `data/raw_cache` is pure staging — script 03 stages only months missing
   from the panel, so it is safe to delete and costs ~230 MB to refill per
   month. Cleared 2026-08-08, reclaiming 27 GB.
+* Credit magnitude in the chart is colour on the line, never a second
+  y-axis — a dual-scale plot invents a correlation the data doesn't have.
+  The dots' height stays `m`; the amount is four steps of the credit ramp,
+  starting one step up because the ramp's darkest step is chart-background
+  dark. Figures live in the summary line and the tooltip, so nothing is
+  colour-only. Don't "improve" this into a twin-axis chart.
+* Credit history is stored as events, not planes, and carries no offset
+  table: the per-cell event *count* rides the tier's gzipped planes and the
+  client prefix-sums it. That is why `k<r>` is the one plane stored raw
+  rather than delta-encoded — it is 99.8% zeros, and delta-ing turns those
+  runs into alternating noise.
+* Month bundle retention has still never actually pruned anything: it needs
+  more than `VIZ_KEEP_MONTHS` bundles to fire, and there is one. 2026-07
+  makes two (still no prune); the **2026-08 run is the first time either
+  `VIZ_KEEP_MONTHS` or the host's `KEEP_MONTHS` deletes a directory**. Watch
+  that run rather than trusting the code.
 * Charts are Apache ECharts 6.1.0 from unpkg; piecewise `visualMap` is
   broken there — the diverging fill uses two silent zero-clamped series
   instead. Don't "simplify" it back.
