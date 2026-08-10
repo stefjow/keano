@@ -679,9 +679,14 @@ function wholeTierChunk(T, r, sec, withCredit) {
   const c = { first: 0, nR3: NP, cellStart: 0, nCells: META.n[r],
               credBase: 0, loaded: false };
   fillChunk(T, c, sec.raw("bm" + r),
-            { tm: sec.u8("tm" + r), ty: sec.u8("ty" + r),
-              tt: sec.u8("tt" + r), t5: sec.u8("t5" + r),
-              tc: sec.u8("tc" + r), cy: sec.u8("cy" + r), ca: sec.u8("ca" + r) },
+            Object.assign(
+              { tm: sec.u8("tm" + r), ty: sec.u8("ty" + r),
+                tt: sec.u8("tt" + r), t5: sec.u8("t5" + r),
+                tc: sec.u8("tc" + r), cy: sec.u8("cy" + r), ca: sec.u8("ca" + r) },
+              /* exact counts of credited children, one per window — raw, not
+                 quantized levels. res-6 is a single cell, so it has none. */
+              r === 6 ? {} : { nc: sec.raw("nc" + r), ny: sec.raw("ny" + r),
+                               na: sec.raw("na" + r) }),
             withCredit ? sec.raw("k" + r) : null);
   return c;
 }
@@ -960,9 +965,9 @@ const isChange = key => key === "yoy" || key === "trend" || key === "trend5";
 const CREDIT_SCOPE = { credit: "month", credit12: "12m", creditAll: "all" };
 /* window -> [fine-tier plane, scale suffix, wording] */
 const SCOPE_PLANE = {
-  month: ["tc", "",  "this month"],
-  "12m": ["cy", "y", "over the last 12 months"],
-  all:   ["ca", "a", "over the full record"]   // wording matches the res-3 note
+  month: ["tc", "",  "this month",              "nc"],
+  "12m": ["cy", "y", "over the last 12 months", "ny"],
+  all:   ["ca", "a", "over the full record",    "na"]   // wording as the res-3 note
 };
 /* Hash routing: #<layer>, #<layer>/<h3-id> (deep link to a hex) or
    #<layer>/@<lat>,<lng>,<zoom> (deep link to a view) */
@@ -1870,7 +1875,7 @@ function updateTopRegions() {
      the reader back out to res-3. Only the month window used to have fine-tier
      planes, which is why this was res-3-only before. */
   const r = displayRes();
-  const [prop, sfx, winLab] = SCOPE_PLANE[topScope];
+  const [prop, sfx, winLab, cprop] = SCOPE_PLANE[topScope];
   if (r >= 4) {
     /* --- individual hexes of the active fine tier, in view ---------------- */
     const T = TIERS[r];
@@ -1880,7 +1885,7 @@ function updateTopRegions() {
     }
     /* loaded chunks only — updateFine is already fetching the missing ones */
     const PAD = 1.0, ckey = "credit" + r + sfx, credit = dec[ckey];
-    const cand = [];   // [credit, lat, lng, id]
+    const cand = [];   // [credit, lat, lng, id, credited children or null]
     for (let j = 0; j < NP; j++) {
       const la3 = r3Lat[j];
       if (la3 < s - PAD || la3 > n + PAD) continue;
@@ -1900,7 +1905,8 @@ function updateTopRegions() {
             const id = childId(parent, r, by * 8 + bit);
             const [la, lo] = h3.cellToLatLng(id);
             if (la >= s && la <= n && inLng(lo, w, e))
-              cand.push([credit(lev2t8(lev)), la, lo, id]);
+              cand.push([credit(lev2t8(lev)), la, lo, id,
+                         c[cprop] ? c[cprop][li] : null]);
           }
           li++;
         }
@@ -1916,14 +1922,15 @@ function updateTopRegions() {
         "month in the past 5 years × neighbourhood weight)."
       : (r === 6 ? "Σ = credit paid to this cell " + winLab
                  : "Σ = paid credit summed over the res-6 cells of a ~" +
-                   TIER_KM2[r] + " km² area " + winLab) +
+                   TIER_KM2[r] + " km² area " + winLab +
+                   ", with the number of them that earned") +
         (topScope === "month" ? ". Zoom in for individual cells" : "") + ".") +
       " Click → to fly.";
-    cand.slice(0, 10).forEach(([cr, la, lo, id], i) => {
-      tb.appendChild(topRow(i, [
-        ["rk", String(i + 1)], ["", fmtCoord(la, lo)],
-        ["cr", fmt[ckey](cr)]
-      ], la, lo, HEX_ZOOM[r], id));
+    cand.slice(0, 10).forEach(([cr, la, lo, id, cnt], i) => {
+      const cells = [["rk", String(i + 1)], ["", fmtCoord(la, lo)]];
+      if (cnt != null) cells.push(["", cnt + "c"]);   // res-4/5 only
+      cells.push(["cr", fmt[ckey](cr)]);
+      tb.appendChild(topRow(i, cells, la, lo, HEX_ZOOM[r], id));
     });
     if (cand.length === 0)
       tb.appendChild(topEmpty(r === 6 ? "no credited cells in view"

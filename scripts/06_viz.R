@@ -206,6 +206,9 @@ agg_tier = function(key) {
     f = mean(perf_5y[is.finite(perf_5y)]),
     credit = sum(credit, na.rm = TRUE),
     cr_y = sum(cr_y), cr_a = sum(cr_a),
+    n_cr   = sum(!is.na(credit) & credit > 0),   # children paid this month
+    n_cr_y = sum(cr_y > 0),                      # ...at some point in 12 months
+    n_cr_a = sum(cr_a > 0),                      # ...ever
     n_el = sum(elig)
   ), keyby = c("r3i", key)]
 }
@@ -370,6 +373,9 @@ tier_sec = function(r, tt, key, B, crmax, i) {
                                                    NA_real_))))
   add_sec(paste0("ca", r), delta_u8(lev_u8(fifelse(ok, t_cr(tt$cr_a, ca_max[i]),
                                                    NA_real_))))
+  stopifnot(max(tt$n_cr_a) <= 255L)   # 49 children at res-4, 7 at res-5
+  for (nm in list(c("nc", "n_cr"), c("ny", "n_cr_y"), c("na", "n_cr_a")))
+    add_sec(paste0(nm[1], r), as.raw(tt[[nm[2]]]))
 }
 tier_sec(4, t4, t4$p4, 1L, cr4_max, 2L)
 tier_sec(5, t5, t5$p5, 8L, cr5_max, 3L)
@@ -671,9 +677,11 @@ message("Per-hex credit: ",
 
 # --- Tier files + res-6 chunks (they carry the credit-count planes) -----------
 t4f = concat_raw(c(sections[c("bm4", "tm4", "ty4", "tt4", "t54",
-                              "tc4", "cy4", "ca4")], list(k4 = k4)))
+                              "tc4", "cy4", "ca4",
+                              "nc4", "ny4", "na4")], list(k4 = k4)))
 t5f = concat_raw(c(sections[c("bm5", "tm5", "ty5", "tt5", "t55",
-                              "tc5", "cy5", "ca5")], list(k5 = k5)))
+                              "tc5", "cy5", "ca5",
+                              "nc5", "ny5", "na5")], list(k5 = k5)))
 write_bin_gz(t4f$bin, file.path(wdata, "t4.bin"))
 write_bin_gz(t5f$bin, file.path(wdata, "t5.bin"))
 

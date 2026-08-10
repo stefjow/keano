@@ -325,6 +325,8 @@ const topState = page => page.evaluate(() => {
     rows: document.querySelectorAll("#top-table button.loc").length,
     rowVals: [...document.querySelectorAll("#top-table tr")]
                .map(tr => tr.querySelector(".cr")?.textContent),
+    rowCells: [...document.querySelectorAll("#top-table tr")]
+                .map(tr => [...tr.querySelectorAll("td")].map(td => td.textContent)),
     pinned: document.getElementById("region-panel").classList.contains("pinned"),
     pinnedRes: m ? h3.getResolution(m[0]) : null,
     cred: document.getElementById("rp-cred").textContent,
@@ -423,6 +425,18 @@ async function topRegionsRun(browser, base) {
        "res-" + res + " note explains " + (res === 6 ? "a per-cell %" : "a Σ over children"));
     ok(st.rows > 0, "res-" + res + " lists " + st.rows + " credited hex(es) in view");
     if (!st.rows) continue;
+    /* res-4/5 rows carry the count of credited res-6 children, like res-3 does;
+       res-6 is a single cell so it has no such column. A res-4 hex has 49
+       children and a res-5 hex 7, so the count must not exceed that. */
+    const cells = st.rowCells[0] || [];
+    const cnt = cells.find(t => /^\d+c$/.test(t));
+    if (res === 6) {
+      ok(!cnt, "res-6 rows have no credited-children column (" + cells.join("|") + ")");
+    } else {
+      const lim = res === 4 ? 49 : 7;
+      ok(cnt && +cnt.slice(0, -1) >= 1 && +cnt.slice(0, -1) <= lim,
+         "res-" + res + " rows show credited children " + cnt + " (max " + lim + ")");
+    }
 
     const flown = await flyFirstRow(page);
     ok(flown.res === res,
