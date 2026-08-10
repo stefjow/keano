@@ -7,6 +7,46 @@ Rough order inside each section is by value-for-effort, not commitment.
 
 ## Shipped 2026-08-10
 
+### credit_v3: sub-margin steps are banked, not discarded
+Same day, one map question later. Cell `862d63837ffffff` hit a new low of 42.1
+in 2020-12 and was paid nothing. Cause was not the plume guard (the weight was
+a full 1.000) but the noise margin, by 0.04 of a percentage point: the bar was
+42.6 — a low it had set in 2020-08 and never been paid for — so the step was
+1.16% against a 1.2% gate.
+
+That is v2's leak in one cell. Of 25 months where it set a new running low, 14
+earned nothing, 12 of them for steps under the margin; each was discarded and
+the next measured from the new lower low, so 42.8 → 42.6 → 42.1 paid nothing
+across two steps even though 1.6% in one step would have cleared.
+
+v3 measures the undercut against the level the cell was last *paid* at instead,
+so those steps accumulate. Measured on two shards before implementing:
+
+* telescoping ratio 0.77 → 0.87 of `log(m_first/m_last)`
+* +12% credit, +16% paid months
+* **exactly the same cells earn** — 58,701 both. Not a coincidence: a cell's
+  first payment always uses the v2 baseline as its reference, so v3 can only
+  top up cells that were already earning.
+* Spearman 0.992 on per-cell totals, 83% of the top-1000 retained
+
+An effect that was not the goal: because the reference resets only when credit
+was actually *paid*, a month the plume guard zeroed leaves its undercut on the
+books. The guard became a deferral rather than a forfeit — visible on that same
+cell, where 2021-01's guard-blocked 3.55% is recovered in 2021-02 at 10.99%.
+
+The residual 13% is partial-weight months: paid at `u × w` but the reference
+still resets, so the `(1 − w)` fraction is forfeited. Fixable by resetting
+proportionally; not worth the complexity.
+
+Shipped the same way as before — computed beside v1 and v2, both verified
+byte-identical first, then the readers flipped. Gate fired once on 84 closed
+months and only on the two credit columns; the *_v1 audit totals and every
+m-based column came back identical, which is what makes the ack safe.
+
+`carry_credit()` is a sequential per-cell scan, not a rolling window — the
+reference depends on the payment history. Still strictly causal, so
+recomputation is exact. Build 2m37s → 3m16s.
+
 ### The credit rule changed: the baseline no longer waits a year
 Two questions from the map drove this. At res-3 (Chongqing) credit was paid
 while the mean line rose — that turned out to be mean-vs-sum aggregation, 35

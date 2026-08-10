@@ -19,9 +19,9 @@ incentive-driven system. Successor to the city-based
 | Workhorse series | `m` = trailing 12-month mean of monthly NO₂ | Deseasonalized *by construction* (full-year window); smooths retrieval noise; causal |
 | Short-term score | `perf_short` = YoY change of `m` | Causal, comparable across cells |
 | Long-term score | `perf_long` = annualized change of `m` vs. the cell's first full year | Causal |
-| Credit baseline | Own-history minimum of `m` over the window **t−60 … t−1 months** — the lowest the cell has been in five years, up to and including last month | Expiring ratchet: records age out after 5 years, so every cell periodically has something to earn. Including the freshest months is what makes each reduction paid **once**: a cell has to keep beating its own best, and over a full record its credit sums to ≈ `log(m_first / m_last)` — the same total for the same total reduction, fast or slow (measured: median ratio 1.00 unweighted). The window must end at t−1, not t; at t the baseline is ≤ `m` by construction and nothing can ever earn |
-| Credit | Relative undercut `(B − m)/B`, gated at a **1.2% noise margin** | %-based, so clean and dirty cells compete symmetrically; margin avoids paying for retrieval noise. 1.2% rather than 2% because the comparison is against a baseline that may be one month old, not a year old: measured on flat-trend cells, p95 `|Δlog m|` at lag 1 is 1.63× smaller than at lag 12, so 2% / 1.63 ≈ 1.2% |
-| Credit weighting | Cell credit × `clamp01((U₄ + ramp)/(2·ramp))` with `ramp = 2%`, where `U₄` is the res-4 parent's (~1,770 km², mean of children `m`) undercut of its own identically constructed baseline. The ramp is a **separate constant from the credit margin** — narrowing it in step with the margin would sharpen the plume guard exactly as the baseline change makes it less necessary (a fluke low now becomes the cell's own baseline next month, so it is paid once instead of for a year) | NO₂ is transport-driven at 36 km² (lifetime ~hours, plumes travel tens of km): a cell can hit a record low because this year's winds moved the neighbour's plume, not because anyone reduced. Full credit only when the neighbourhood is also ≥ margin below its baseline; zero when it is ≥ margin above. City-wide improvements pass untouched (parent moves with the cells); isolated implausible records don't. It binds harder against the current baseline than it did against the year-old one — full weight on 63% of paid months rather than 79%, with 8% zeroed outright — which is also why the sum above reaches ≈ 0.85·`log(m_first/m_last)` rather than 1.00. `is_record` stays unweighted (the record is a fact; the payout is conditioned) |
+| Credit baseline | The level the cell was **last actually paid at**, falling back to its own minimum `m` over **t−60 … t−1** when no payment is live (never paid, or the last one is older than the 5-year expiry) | Expiring ratchet: records age out after 5 years, so every cell periodically has something to earn. Including the freshest months is what makes each reduction paid **once**: a cell has to keep beating its own best, and over a full record its credit sums to ≈ `log(m_first / m_last)` — the same total for the same total reduction, fast or slow. The window must end at t−1, not t; at t the baseline is ≤ `m` by construction and nothing can ever earn. Measuring from the last *paid* level rather than the lowest reached means a descent taken in steps each below the margin accumulates instead of being discarded — measured, that lifts the sum from 0.77 to 0.87 of `log(m_first/m_last)` and pays ~12% more to exactly the same cells. It also makes the plume guard below a deferral rather than a forfeit: a blocked undercut stays on the books until the neighbourhood check passes |
+| Credit | Relative undercut `(B − m)/B`, gated at a **1.2% noise margin**, where `B` is that reference | %-based, so clean and dirty cells compete symmetrically; margin avoids paying for retrieval noise. 1.2% rather than 2% because the comparison is against a baseline that may be one month old, not a year old: measured on flat-trend cells, p95 `|Δlog m|` at lag 1 is 1.63× smaller than at lag 12, so 2% / 1.63 ≈ 1.2% |
+| Credit weighting | Cell credit × `clamp01((U₄ + ramp)/(2·ramp))` with `ramp = 2%`, where `U₄` is the res-4 parent's (~1,770 km², mean of children `m`) undercut of its own identically constructed baseline. The ramp is a **separate constant from the credit margin** — narrowing it in step with the margin would sharpen the plume guard exactly as the baseline change makes it less necessary (a fluke low now becomes the cell's own baseline next month, so it is paid once instead of for a year) | NO₂ is transport-driven at 36 km² (lifetime ~hours, plumes travel tens of km): a cell can hit a record low because this year's winds moved the neighbour's plume, not because anyone reduced. Full credit only when the neighbourhood is also ≥ margin below its baseline; zero when it is ≥ margin above. City-wide improvements pass untouched (parent moves with the cells); isolated implausible records don't. It binds harder against the current baseline than it did against the year-old one — full weight on 63% of paid months rather than 79%, with 8% zeroed outright — which is the remaining reason the sum above reaches ≈ 0.87·`log(m_first/m_last)` rather than 1.00: a month paid at partial weight still resets the reference, so the unpaid fraction is forfeited. `is_record` stays unweighted (the record is a fact; the payout is conditioned) |
 | Eligibility | `m ≥ NO2_FLOOR` (default 30 µmol/m²) | %-changes are meaningless at background noise level; panel still keeps all cells (shipping lanes included) |
 
 ### History consistency (append-only contract)
@@ -119,24 +119,38 @@ All in `config/config.R`: `H3_RESOLUTION`, `WINDOW_MONTHS`,
 02–05 parallelize over chunks/months/shards). The shipped credit rule is
 `CREDIT_V2_EXCLUDE_MONTHS` / `CREDIT_V2_MARGIN` / `CREDIT_V2_PARENT_RAMP`.
 
-### The retired credit rule
+### The retired credit rules
 
-`BASELINE_EXCLUDE_MONTHS = 12` and `CREDIT_MARGIN = 0.02` still drive a
-second set of columns — `baseline`, `parent_under`, `credit`, `is_record` —
-computed beside the shipped ones in script 04. Nothing user-facing reads
-them; they are the audit trail for what was published before the rule
-changed, and `monthly_summary.csv` keeps their totals as `*_v1`.
+Script 04 computes three generations of the rule side by side and only the
+newest is read downstream. A rule change therefore never rewrites a column
+anyone has already seen, and there is always an audit trail for what was
+published before.
 
-That rule held the baseline back a year, so a cell was paid the *cumulative*
-gap every month until its own low aged in. Totals therefore ran **~7×
-higher** for the same reductions, and — contrary to the intent recorded when
-it was designed — it did not deliver pace-independence: measured across
-48k earning cells, v2's share of v1 credit is 11% for cells improving faster
-than 8%/yr and 16% for cells flatter than 1%/yr, i.e. v1 systematically
-over-paid fast improvers. It also kept paying for up to a year after a cell
-had stopped improving, which is what prompted the change. The switch moved
-13% of credit volume and 42% of the top-1000 cells; the same or slightly more
-cells earn (48.5k vs 45.8k on the two shards measured).
+| column set | driven by | status |
+|---|---|---|
+| `baseline`, `parent_under`, `credit`, `is_record` | `BASELINE_EXCLUDE_MONTHS = 12`, `CREDIT_MARGIN = 0.02` | v1, retired |
+| `baseline_v2`, `parent_under_v2`, `credit_v2` | the `CREDIT_V2_*` constants | v2, retired |
+| `credit_v3`, `is_record_v3` | the same `CREDIT_V2_*` constants + `carry_credit()` | **shipped** |
+
+`monthly_summary.csv` keeps v1's totals as `*_v1`; `n_records` and
+`total_credit` are always the shipped rule.
+
+**v1** held the baseline back a year, so a cell was paid the *cumulative* gap
+every month until its own low aged in. Totals ran **~6× higher** for the same
+reductions, and — contrary to the intent recorded when it was designed — it
+did not deliver pace-independence: measured across 48k earning cells, the new
+rule's share of v1 credit is 11% for cells improving faster than 8%/yr and 16%
+for cells flatter than 1%/yr, i.e. v1 systematically over-paid fast improvers.
+It also kept paying for up to a year after a cell had stopped improving, which
+is what prompted the change.
+
+**v2** fixed that but discarded any step smaller than the noise margin: a
+gradual descent measured from a new, lower low each month never accumulated,
+so its credit summed to only 0.77 of `log(m_first/m_last)`. **v3** measures
+from the last *paid* level instead, which recovers most of that (0.87) for
+~12% more credit to exactly the same set of cells — a strict superset of v2's
+payments, since a cell's first payment always uses the v2 baseline as its
+reference.
 Rankings and composites are **derived views** — they can be redefined at any
 time without touching the stored panel or metric history. So is the map:
 script 06 renders it (MapLibre + h3-js, dark basemap) with res-3 hexagons

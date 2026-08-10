@@ -31,17 +31,28 @@
 #              neighbourhood at/near record lows too; collective improvements
 #              pass untouched. 0 if observed but no paid record; NA if m or
 #              baseline undefined
+# Three generations of the credit rule are computed side by side. Only the
+# newest is read by anything downstream; the others are the audit trail for
+# what was published before, and keeping them means a rule change never
+# rewrites a column anyone has already seen.
+#
+#   credit     (v1, retired) baseline held back a year, 2% margin. Pays the
+#              cumulative gap every month until the cell's own low ages in, so
+#              totals run ~7x the current rule and a cell kept earning for up
+#              to a year after it stopped improving.
 #   baseline_v2 / parent_under_v2 / credit_v2
-#              A candidate rule, computed in parallel and shipped nowhere yet.
-#              Same machinery; the baseline window is simply not held back a
-#              year (it ends at t-1), so a cell must undercut its own most
-#              recent low. That makes lifetime credit telescope to
-#              log(m_first / m_last) — paid once per unit of reduction, at any
-#              pace — where v1 pays the cumulative gap every month until the
-#              baseline catches up, so v1 totals run ~7x larger. Margin and
-#              plume ramp are separate knobs here; see config for why.
-#              The v1 columns are untouched, so the append-only contract is
-#              unaffected and the two rules can be compared on real data.
+#              (v2, retired) baseline window ends at t-1 instead of t-12, so a
+#              cell must undercut its own most recent low. Lifetime credit then
+#              telescopes to log(m_first / m_last) — paid once per unit of
+#              reduction, at any pace. Margin retuned to 1.2% for the closer
+#              comparison; plume ramp left at 2% (see config).
+#   credit_v3 / is_record_v3
+#              (v3, SHIPPED) v2's parameters with the reference carried
+#              forward: measured against the level the cell was last paid at,
+#              not the lowest it has been. Steps too small to clear the margin
+#              accumulate instead of being discarded, which lifts the
+#              telescoping ratio from ~0.77 to ~0.87 and pays ~12% more, to the
+#              same set of cells. See carry_credit() below.
 #
 # Output: data/metrics/shard=<h3res0>/part-0.parquet
 # ============================================================================
@@ -58,6 +69,41 @@ parent_r4 = function(h) {
   d4 = bitwShiftR(strtoi(substr(h, 7, 7), 16L), 1L)
   paste0("84", substr(h, 3, 6), HEXC[bitwOr(bitwShiftL(d4, 1L), 1L) + 1L],
          "ffffffff")
+}
+
+# --- credit_v3: carry the unpaid remainder forward ---------------------------
+# v2 measures the undercut against the lowest m of the last five years, so a
+# descent taken in steps each smaller than the margin is never paid: every step
+# is discarded and the next is measured from the new, lower low. v3 measures
+# against the level the cell was last *paid* at instead, so those steps
+# accumulate until together they clear the margin.
+#
+# Two properties worth knowing. The reference only ever moves down (a payment
+# needs m < P*(1-margin)), so no ground is ever paid for twice. And because the
+# reference resets only when credit was actually paid, a month the plume guard
+# zeroed leaves its undercut on the books — the guard defers a payment rather
+# than cancelling it.
+#
+# Sequential by construction (the reference depends on the payment history), so
+# this is a per-cell scan, not a rolling window. Still strictly causal: it only
+# ever looks backwards, so recomputing reproduces it exactly.
+carry_credit = function(midx, m, base, elig, w, margin, expiry) {
+  n = length(m)
+  credit = numeric(n); rec = logical(n)
+  P = NA_real_; Pm = NA_integer_          # level and month of the last payment
+  for (i in seq_len(n)) {
+    if (!isTRUE(elig[i]) || !is.finite(m[i])) next
+    # a payment older than the expiry stops binding; fall back to v2's baseline
+    R = if (is.na(Pm) || (midx[i] - Pm) > expiry) base[i] else P
+    if (!is.finite(R)) next
+    u = (R - m[i]) / R
+    if (u > margin) {
+      rec[i] = TRUE
+      credit[i] = u * w[i]
+      if (credit[i] > 0) { P = m[i]; Pm = midx[i] }
+    }
+  }
+  list(credit, rec)
 }
 
 cells = as.data.table(read_parquet(file.path(DATA_LOOKUP, "cells.parquet"),
@@ -170,22 +216,36 @@ do_shard = function(s) {
             undercut_v2 * w_parent_v2, 0)
   )]
 
+  # credit_v3 (shipped): v2's parameters, but the reference is the level the
+  # cell was last paid at, so sub-margin steps carry forward. Only cells that
+  # are eligible at some point can ever earn, so the scan skips the rest.
+  dt[, `:=`(credit_v3 = 0, is_record_v3 = FALSE)]
+  ever = dt[eligible == TRUE, unique(cell_id)]
+  if (length(ever)) {
+    dt[cell_id %in% ever,
+       c("credit_v3", "is_record_v3") := carry_credit(
+         midx, m, baseline_v2, eligible, w_parent_v2,
+         CREDIT_V2_MARGIN, BASELINE_WINDOW_MONTHS), by = cell_id]
+  }
+  dt[is.na(m) | is.na(baseline_v2), `:=`(credit_v3 = NA_real_, is_record_v3 = NA)]
+
   # Drop the empty lead-in before a cell's first observation
   out = dt[obs | has_m, .(
     cell_id, month = index_to_label(midx), no2, n_pix,
     m, perf_short, perf_long, baseline, parent_under,
     credit, eligible, is_record,
-    baseline_v2, parent_under_v2, credit_v2
+    baseline_v2, parent_under_v2, credit_v2,
+    credit_v3, is_record_v3
   )]
 
   shard_dir = ensure_dir(file.path(DATA_METRICS, paste0("shard=", s)))
   write_parquet(out, file.path(shard_dir, "part-0.parquet"))
 
-  message(sprintf("[%s] %s cells, %s records, credit %.0f / v2 %.0f, %.1fs", s,
+  message(sprintf("[%s] %s cells, %s records, credit %.0f / v3 %.0f, %.1fs", s,
                   format(uniqueN(out$cell_id), big.mark = ","),
                   format(sum(out$is_record), big.mark = ","),
                   sum(out$credit, na.rm = TRUE),
-                  sum(out$credit_v2, na.rm = TRUE),
+                  sum(out$credit_v3, na.rm = TRUE),
                   as.numeric(Sys.time() - t0, units = "secs")))
   s
 }
@@ -197,7 +257,7 @@ clusterExport(cl, c("do_shard", "parent_r4", "HEXC", "midx_full",
                     "BASELINE_WINDOW_MONTHS", "BASELINE_EXCLUDE_MONTHS",
                     "CREDIT_MARGIN", "NO2_FLOOR",
                     "CREDIT_V2_EXCLUDE_MONTHS", "CREDIT_V2_MARGIN",
-                    "CREDIT_V2_PARENT_RAMP",
+                    "CREDIT_V2_PARENT_RAMP", "carry_credit",
                     "month_index", "index_to_label", "roll_min_adaptive",
                     "ensure_dir"))
 invisible(clusterEvalQ(cl, suppressMessages({

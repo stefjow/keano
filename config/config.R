@@ -50,13 +50,26 @@ BASELINE_EXCLUDE_MONTHS = 12    # ...excluding the freshest year, so the baselin
 CREDIT_MARGIN           = 0.02  # relative undercut must exceed this noise gate
 NO2_FLOOR               = 30    # µmol/m²; cells with m below are not eligible
 
-# --- credit_v2: a parallel, unshipped candidate rule ---------------------------
-# Same machinery, one change: the baseline window is NOT held back a year, so it
-# ends at t-1 and a cell must undercut its own most recent low, not a low that
-# has had a year to age. Consequence, measured and exact: a cell's lifetime
-# credit telescopes to log(m_first / m_last) — paid once per unit of reduction,
-# independent of pace or path — instead of paying the cumulative gap every month
-# until the baseline catches up. Totals come out ~7x smaller for that reason.
+# --- The shipped credit rule (credit_v3) ---------------------------------------
+# Script 04 computes three generations side by side; only the newest is read
+# downstream. These constants drive v2 and v3 both — v3 differs from v2 only in
+# what the undercut is measured against, not in any parameter, so nothing here
+# is duplicated per version.
+#
+# The baseline window is NOT held back a year: it ends at t-1, so a cell must
+# undercut its own most recent low, not a low that has had a year to age.
+# Consequence, measured and exact: a cell's lifetime credit telescopes to
+# log(m_first / m_last) — paid once per unit of reduction, independent of pace
+# or path — instead of paying the cumulative gap every month until the baseline
+# catches up. Totals come out ~6x smaller for that reason, which is a change of
+# unit, not of coverage.
+#
+# v3 then measures against the level the cell was last *paid* at rather than the
+# lowest it has been, so a descent taken in steps each below the margin
+# accumulates instead of being discarded. Measured: telescoping ratio 0.77 ->
+# 0.87, ~12% more credit, to exactly the same set of cells. It also turns the
+# plume guard into a deferral rather than a forfeit. See carry_credit() in
+# scripts/04_metrics.R.
 #
 # EXCLUDE must be >= 1: at 0 the window contains the current month, the baseline
 # is <= m by construction, and no cell can ever earn.
