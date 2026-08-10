@@ -7,6 +7,49 @@ Rough order inside each section is by value-for-effort, not commitment.
 
 ## Shipped 2026-08-10
 
+### The credit rule changed: the baseline no longer waits a year
+Two questions from the map drove this. At res-3 (Chongqing) credit was paid
+while the mean line rose — that turned out to be mean-vs-sum aggregation, 35
+of 343 cells paid, every one of them genuinely improving. At res-6
+(`8640a5a07ffffff`, Hunan) a cell was paid in 2020-11/12 after climbing from
+50.0 back to 56.0, because its own 2020 lows sat inside the 12 months the
+baseline was not allowed to see.
+
+Investigated before touching anything. Measured facts that decided it:
+
+* Credit never went to a deteriorating cell — **99.98%** of paid cell-months
+  had `m` more than 2% below a year earlier. The blind spot was never "worse
+  than last year", only "gave back a recent gain".
+* Removing the exclusion turns out to be the same change as a
+  no-backsliding gate at tol 0; they agree on 99.7% of paid months, and where
+  they differ it is *always* because the all-time low predates the 5-year
+  window. So the gate was the worse formulation of the same idea — it also
+  destroys the 5-year expiry.
+* Per-cell lifetime credit then telescopes to `log(m_first / m_last)`
+  exactly (median ratio 1.00 unweighted). One sentence, path-independent.
+* The old rule did **not** deliver the pace-independence its own design notes
+  claimed: v2/v1 is 11% for the fastest improvers and 16% for the flattest,
+  so v1 over-paid fast movers.
+* The margin had to move with it. 2% was calibrated against a year-old
+  baseline; on flat-trend cells p95 `|Δlog m|` at lag 1 is 1.63× smaller than
+  at lag 12, so the equivalent gate is 1.2%. Measured, not guessed.
+
+Shipped as `credit_v2` computed beside `credit` in script 04, so v1 stayed
+byte-identical (verified: max abs diff 0.000e+00 on m, baseline,
+parent_under, credit; zero `is_record` mismatches) and the append-only
+contract was never at risk. Then everything user-facing was pointed at v2 in
+one step — 05 and 06 read `credit_v2` under the name `credit`, so no
+branching downstream. v1 columns remain as the audit trail.
+
+Cost, stated plainly: credit volume is 13% of what it was, 42% of the
+top-1000 cells reshuffle, and the same or slightly more cells earn. The
+switch tripped the script-05 sanity gate exactly as designed — `n_records`
+and `total_credit` changed on 86 closed months, nothing else — and was
+accepted once with `KEANO_SANITY_ACK=1`. That is the intended shape of a
+deliberate re-vintage.
+
+### Credit-payout markers in the trend chart
+
 ### Fly-to works at every tier, not just res-3 and res-6
 `updateTopRegions()` switched to per-cell rows only at `displayRes() === 6`,
 so in the res-4 and res-5 zoom bands the panel silently fell back to res-3
@@ -204,6 +247,18 @@ the tier the list follows and where `→` lands.
 * `data/raw_cache` is pure staging — script 03 stages only months missing
   from the panel, so it is safe to delete and costs ~230 MB to refill per
   month. Cleared 2026-08-08, reclaiming 27 GB.
+* The credit rule is versioned, never edited. `credit_v2` was computed for a
+  full history beside `credit` and verified not to move a single v1 value
+  before anything switched over. Any future rule change goes the same way —
+  a new column, both computed, compare on real data, then flip the readers.
+  Editing a rule in place would silently rewrite every credit ever issued.
+* `BASELINE_EXCLUDE_MONTHS` must be ≥ 1 in any variant. At 0 the baseline
+  window includes the current month, so the baseline is ≤ `m` by construction
+  and no cell can ever earn anything, anywhere.
+* The plume-guard ramp is deliberately a separate constant from the credit
+  margin (v1 shared one). Under v2 a wind-driven fluke is paid once and then
+  becomes the cell's own baseline, so the guard is needed *less*, not more —
+  narrowing it in step with the margin would have been backwards.
 * Credit magnitude in the chart is colour on the line, never a second
   y-axis — a dual-scale plot invents a correlation the data doesn't have.
   The dots' height stays `m`; the amount is four steps of the credit ramp,

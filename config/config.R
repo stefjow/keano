@@ -50,6 +50,34 @@ BASELINE_EXCLUDE_MONTHS = 12    # ...excluding the freshest year, so the baselin
 CREDIT_MARGIN           = 0.02  # relative undercut must exceed this noise gate
 NO2_FLOOR               = 30    # µmol/m²; cells with m below are not eligible
 
+# --- credit_v2: a parallel, unshipped candidate rule ---------------------------
+# Same machinery, one change: the baseline window is NOT held back a year, so it
+# ends at t-1 and a cell must undercut its own most recent low, not a low that
+# has had a year to age. Consequence, measured and exact: a cell's lifetime
+# credit telescopes to log(m_first / m_last) — paid once per unit of reduction,
+# independent of pace or path — instead of paying the cumulative gap every month
+# until the baseline catches up. Totals come out ~7x smaller for that reason.
+#
+# EXCLUDE must be >= 1: at 0 the window contains the current month, the baseline
+# is <= m by construction, and no cell can ever earn.
+#
+# The margin is retuned because the comparison changed. 2% was calibrated
+# against a baseline at least a year old; measured on flat-trend cells, the p95
+# of |1-month change in log m| is 1.63x smaller than the 12-month one, so the
+# equivalent gate is 2% / 1.63 ~= 1.2%.
+#
+# The parent ramp is deliberately NOT tied to the margin (v1 shares one constant
+# for both). Narrowing it with the margin would sharpen the plume guard just as
+# v2 makes it less necessary — under v2 a wind-driven fluke is paid once and
+# then becomes the cell's own baseline, where under v1 it collects for a year.
+#
+# Computed alongside `credit`, never instead of it: v1 columns are untouched, so
+# the append-only contract still holds and both rules can be compared on real
+# data before anything is switched.
+CREDIT_V2_EXCLUDE_MONTHS = 1L    # baseline window ends at t-1, not t-12
+CREDIT_V2_MARGIN         = 0.012 # retuned noise gate (see above)
+CREDIT_V2_PARENT_RAMP    = 0.02  # plume-guard ramp half-width, kept at v1's
+
 # --- Sanity gate (script 05) --------------------------------------------------
 # A new month must clear these before anything is built or published. Set from
 # the observed history, not guessed — see sanity_findings() in _share.r for the

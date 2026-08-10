@@ -330,7 +330,7 @@ async function topRegionsRun(browser, base) {
        "res-" + res + " list titles itself “" + st.title + "”");
     /* wording has to distinguish the tiers, not just be present: the res-3
        note also carries a Σ and a km² figure ("region", not "area") */
-    ok(st.note.includes(res === 6 ? "5-year baseline" : "km² area"),
+    ok(st.note.includes(res === 6 ? "past 5 years" : "km² area"),
        "res-" + res + " note explains " + (res === 6 ? "a per-cell %" : "a Σ over children"));
     ok(st.rows > 0, "res-" + res + " lists " + st.rows + " credited hex(es) in view");
     if (!st.rows) continue;

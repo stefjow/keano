@@ -7,9 +7,16 @@
 #
 # Outputs (data/rankings/):
 #   monthly_summary.csv      per month: coverage, eligible cells, records,
-#                            total credit, mean perf_short among eligible
+#                            total credit, mean perf_short among eligible.
+#                            n_records/total_credit are the SHIPPED rule
+#                            (credit_v2); *_v1 keep the retired rule for audit
 #   monthly_top_credits.csv  top TOP_N record cells per month, with h3/coords
 #   record_cells.csv         every record event (cell x month with credit > 0)
+#
+# Credit here is credit_v2 — the baseline is not held back a year, so a cell
+# must undercut its own most recent low. Totals therefore run ~7x below the
+# retired v1 rule; that is a change of unit, not of coverage (slightly more
+# cells earn). See config/config.R for the reasoning and script 04 for both.
 # ============================================================================
 
 source("config/config.R")
@@ -21,32 +28,45 @@ ensure_dir(TMP_DIR)
 cells = as.data.table(read_parquet(file.path(DATA_LOOKUP, "cells.parquet")))
 shards = sort(unique(cells$shard))
 
+# The shipped credit rule is credit_v2 (see config and script 04): the baseline
+# is not held back a year, so a cell must undercut its own most recent low.
+# `credit`/`baseline`/`parent_under` below therefore carry the v2 values — the
+# v1 columns stay in data/metrics as the audit trail and are summarised
+# alongside as *_v1, but nothing user-facing reads them.
+# is_record_v2 is derived here rather than stored: it is exactly the v2
+# undercut clearing the v2 margin while eligible, and needs no extra column.
 scan_shard = function(s) {
   mt = open_dataset(DATA_METRICS) |>
     filter(shard == s) |>
-    select(cell_id, month, no2, m, perf_short, baseline, parent_under,
-           credit, eligible, is_record) |>
+    select(cell_id, month, no2, m, perf_short, baseline_v2, parent_under_v2,
+           credit_v2, credit, eligible, is_record) |>
     collect() |>
     as.data.table()
   if (nrow(mt) == 0) return(NULL)
+  mt[, undercut_v2 := (baseline_v2 - m) / baseline_v2]
+  mt[, is_record_v2 := !is.na(m) & !is.na(baseline_v2) & eligible &
+                       undercut_v2 > CREDIT_V2_MARGIN]
 
   list(
     sum = mt[, .(
-      n_cells_obs    = sum(!is.na(no2)),
-      n_eligible     = sum(eligible, na.rm = TRUE),
-      n_records      = sum(is_record),
-      total_credit   = sum(credit, na.rm = TRUE),
-      sum_perf_short = sum(perf_short[eligible & !is.na(perf_short)]),
-      n_perf_short   = sum(eligible & !is.na(perf_short))
+      n_cells_obs     = sum(!is.na(no2)),
+      n_eligible      = sum(eligible, na.rm = TRUE),
+      n_records       = sum(is_record_v2),
+      total_credit    = sum(credit_v2, na.rm = TRUE),
+      n_records_v1    = sum(is_record),
+      total_credit_v1 = sum(credit, na.rm = TRUE),
+      sum_perf_short  = sum(perf_short[eligible & !is.na(perf_short)]),
+      n_perf_short    = sum(eligible & !is.na(perf_short))
     ), by = month],
-    rec = mt[is_record == TRUE,
-             .(cell_id, month, no2, m, baseline, parent_under, credit)]
+    rec = mt[is_record_v2 == TRUE,
+             .(cell_id, month, no2, m, baseline = baseline_v2,
+               parent_under = parent_under_v2, credit = credit_v2)]
   )
 }
 
 # PSOCK, not fork (see script 03): arrow used pre-fork deadlocks in children
 cl = makeCluster(max(1L, min(N_WORKERS, length(shards))), outfile = "")
-clusterExport(cl, c("scan_shard", "DATA_METRICS"))
+clusterExport(cl, c("scan_shard", "DATA_METRICS", "CREDIT_V2_MARGIN"))
 invisible(clusterEvalQ(cl, suppressMessages({
   library(data.table); library(arrow); library(dplyr)
   setDTthreads(2); set_cpu_count(2)
@@ -64,10 +84,12 @@ rec_list = lapply(scans, `[[`, "rec")
 
 # --- Monthly summary ----------------------------------------------------------
 monthly = rbindlist(sum_list)[, .(
-  n_cells_obs    = sum(n_cells_obs),
-  n_eligible     = sum(n_eligible),
-  n_records      = sum(n_records),
-  total_credit   = sum(total_credit),
+  n_cells_obs     = sum(n_cells_obs),
+  n_eligible      = sum(n_eligible),
+  n_records       = sum(n_records),
+  total_credit    = sum(total_credit),
+  n_records_v1    = sum(n_records_v1),
+  total_credit_v1 = sum(total_credit_v1),
   mean_perf_short_eligible = sum(sum_perf_short) / pmax(sum(n_perf_short), 1)
 ), by = month][order(month)]
 

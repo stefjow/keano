@@ -377,9 +377,14 @@
       <h3>The base series: m</h3>
       <p>Everything is computed from <b>m</b>, the average NO₂ over the
       trailing 12 months. Averaging a full year at a time removes the
-      seasonal cycle and smooths out retrieval noise. Since m only uses
-      past months, scores are never revised: a new month appends, closed
-      months stay as they were.</p>
+      seasonal cycle and smooths out retrieval noise. m only ever looks at
+      past months, so adding a new month never changes an old one — the
+      measurements behind a closed month stay as they were.</p>
+      <p>The scoring rules on top of m can change, though. When one does it
+      is recomputed across the whole record rather than applied only going
+      forward, so every month is always scored the same way; the credit rule
+      was last changed in August 2026, and figures published before then were
+      larger for the same reductions.</p>
 
       <h3>The layers</h3>
       <p><b>Trend</b> is the annualized change of m since the cell's first
@@ -389,13 +394,19 @@
 
       <h3>Credits</h3>
       <p>A cell earns credit when m drops below its own historical
-      minimum. The baseline B is the lowest m in the window from 5 years
-      ago to 1 year ago, i.e. the best year that ended at least a year
-      ago, and m has to undercut it by more than a 2% noise margin.
-      Credit is the relative undercut (B − m)/B, so a clean cell and a
-      dirty cell earn the same for the same percentage improvement.
-      Records expire after five years, which means every cell
-      periodically has something new to earn.</p>
+      minimum. The baseline B is the lowest m the cell has reached in the
+      past five years, up to and including last month, and m has to
+      undercut it by more than a 1.2% noise margin. Credit is the
+      relative undercut (B − m)/B, so a clean cell and a dirty cell earn
+      the same for the same percentage improvement. Records expire after
+      five years, which means every cell periodically has something new
+      to earn.</p>
+      <p>Because the baseline includes the most recent month, a cell has
+      to keep beating its own best to keep earning — you are paid once
+      for each step down, not repeatedly for a step you took a year ago.
+      Over a cell's whole record the credit it has earned adds up to
+      roughly log(first m ÷ latest m): the same total for the same total
+      reduction, whether it arrived quickly or slowly.</p>
       <p>Two extra rules apply. Only cells with m ≥ 30 µmol/m² are
       scored, because percent changes mean nothing at background noise
       level. And since NO₂ travels tens of kilometres, a record low can
@@ -403,6 +414,11 @@
       so full credit is only paid when the surrounding ~1,770 km² region
       is also below its own baseline. Isolated implausible records are
       zeroed.</p>
+      <p>On the hover chart, the dots on the trend line mark the months a hex
+      was actually paid, brighter for more credit, with the exact figure in
+      the tooltip. The line under the chart gives the count and the best
+      month. Expect gaps: a hex is paid when it steps down, not for every
+      month it spends at a low level.</p>
 
       <h3>The site</h3>
       <p>The whole thing is static files, no backend. Metrics are packed
@@ -1789,8 +1805,8 @@ function updateTopRegions() {
        children, so those rows read like the regional ones — Σ, as at res-3 */
     title.textContent = r === 6 ? "Top cells — in view" : "Top areas — in view";
     note.textContent = r === 6
-      ? "% = the cell’s paid credit this month (undercut of its own 5-year " +
-        "baseline × neighbourhood weight). Click → to fly."
+      ? "% = the cell’s paid credit this month (undercut of its own lowest " +
+        "month in the past 5 years × neighbourhood weight). Click → to fly."
       : "Σ = paid credit summed over the res-6 cells of a ~" + TIER_KM2[r] +
         " km² area this month. Zoom in for individual cells. Click → to fly.";
     cand.slice(0, 10).forEach(([cr, la, lo, id], i) => {

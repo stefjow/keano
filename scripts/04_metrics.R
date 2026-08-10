@@ -31,6 +31,17 @@
 #              neighbourhood at/near record lows too; collective improvements
 #              pass untouched. 0 if observed but no paid record; NA if m or
 #              baseline undefined
+#   baseline_v2 / parent_under_v2 / credit_v2
+#              A candidate rule, computed in parallel and shipped nowhere yet.
+#              Same machinery; the baseline window is simply not held back a
+#              year (it ends at t-1), so a cell must undercut its own most
+#              recent low. That makes lifetime credit telescope to
+#              log(m_first / m_last) — paid once per unit of reduction, at any
+#              pace — where v1 pays the cumulative gap every month until the
+#              baseline catches up, so v1 totals run ~7x larger. Margin and
+#              plume ramp are separate knobs here; see config for why.
+#              The v1 columns are untouched, so the append-only contract is
+#              unaffected and the two rules can be compared on real data.
 #
 # Output: data/metrics/shard=<h3res0>/part-0.parquet
 # ============================================================================
@@ -106,11 +117,14 @@ do_shard = function(s) {
     NA_real_
   )]
 
-  baseline_len = BASELINE_WINDOW_MONTHS - BASELINE_EXCLUDE_MONTHS + 1L
-  dt[, m_base := shift(m, BASELINE_EXCLUDE_MONTHS), by = cell_id]
-  dt[, baseline := roll_min_adaptive(
-    m_base, pmin(seq_len(.N), baseline_len)
-  ), by = cell_id]
+  # Expiring-min baseline, parameterised by how far back the window has to
+  # stop: v1 holds it back a year, credit_v2 stops at t-1 (see config).
+  roll_prev_min = function(v, excl) {
+    roll_min_adaptive(shift(v, excl),
+                      pmin(seq_len(length(v)), BASELINE_WINDOW_MONTHS - excl + 1L))
+  }
+  dt[, baseline    := roll_prev_min(m, BASELINE_EXCLUDE_MONTHS),    by = cell_id]
+  dt[, baseline_v2 := roll_prev_min(m, CREDIT_V2_EXCLUDE_MONTHS),   by = cell_id]
 
   # res-4 parent context: same series + baseline construction one level up
   # (a res-4 cell lies entirely within one res-0 shard, so this is complete)
@@ -119,12 +133,12 @@ do_shard = function(s) {
   parp = parp[CJ(p4i = unique(ce$p4i), midx = midx_full),
               on = c("p4i", "midx")]
   setkey(parp, p4i, midx)
-  parp[, pm_base := shift(m_p, BASELINE_EXCLUDE_MONTHS), by = p4i]
-  parp[, b_p := roll_min_adaptive(
-    pm_base, pmin(seq_len(.N), baseline_len)
-  ), by = p4i]
-  parp[, parent_under := (b_p - m_p) / b_p]
-  dt[parp, parent_under := i.parent_under, on = c("p4i", "midx")]
+  parp[, b_p    := roll_prev_min(m_p, BASELINE_EXCLUDE_MONTHS),  by = p4i]
+  parp[, b_p_v2 := roll_prev_min(m_p, CREDIT_V2_EXCLUDE_MONTHS), by = p4i]
+  parp[, `:=`(parent_under    = (b_p - m_p) / b_p,
+              parent_under_v2 = (b_p_v2 - m_p) / b_p_v2)]
+  dt[parp, `:=`(parent_under    = i.parent_under,
+                parent_under_v2 = i.parent_under_v2), on = c("p4i", "midx")]
 
   dt[, undercut := (baseline - m) / baseline]
   dt[, eligible := has_m & m >= NO2_FLOOR]
@@ -141,19 +155,37 @@ do_shard = function(s) {
     fifelse(is_record, undercut * w_parent, 0)
   )]
 
+  # credit_v2 (candidate, not shipped): identical shape against the baseline
+  # that has not been held back a year, its own margin, and a plume ramp that
+  # stays at v1's width rather than following the margin down (see config).
+  dt[, undercut_v2 := (baseline_v2 - m) / baseline_v2]
+  dt[, w_parent_v2 := fifelse(
+    is.na(parent_under_v2), 1,
+    pmin(pmax((parent_under_v2 + CREDIT_V2_PARENT_RAMP) /
+              (2 * CREDIT_V2_PARENT_RAMP), 0), 1)
+  )]
+  dt[, credit_v2 := fifelse(
+    is.na(m) | is.na(baseline_v2), NA_real_,
+    fifelse(eligible & undercut_v2 > CREDIT_V2_MARGIN,
+            undercut_v2 * w_parent_v2, 0)
+  )]
+
   # Drop the empty lead-in before a cell's first observation
   out = dt[obs | has_m, .(
     cell_id, month = index_to_label(midx), no2, n_pix,
     m, perf_short, perf_long, baseline, parent_under,
-    credit, eligible, is_record
+    credit, eligible, is_record,
+    baseline_v2, parent_under_v2, credit_v2
   )]
 
   shard_dir = ensure_dir(file.path(DATA_METRICS, paste0("shard=", s)))
   write_parquet(out, file.path(shard_dir, "part-0.parquet"))
 
-  message(sprintf("[%s] %s cells, %s records, %.1fs", s,
+  message(sprintf("[%s] %s cells, %s records, credit %.0f / v2 %.0f, %.1fs", s,
                   format(uniqueN(out$cell_id), big.mark = ","),
                   format(sum(out$is_record), big.mark = ","),
+                  sum(out$credit, na.rm = TRUE),
+                  sum(out$credit_v2, na.rm = TRUE),
                   as.numeric(Sys.time() - t0, units = "secs")))
   s
 }
@@ -164,6 +196,8 @@ clusterExport(cl, c("do_shard", "parent_r4", "HEXC", "midx_full",
                     "WINDOW_MONTHS", "MIN_MONTHS_IN_WINDOW",
                     "BASELINE_WINDOW_MONTHS", "BASELINE_EXCLUDE_MONTHS",
                     "CREDIT_MARGIN", "NO2_FLOOR",
+                    "CREDIT_V2_EXCLUDE_MONTHS", "CREDIT_V2_MARGIN",
+                    "CREDIT_V2_PARENT_RAMP",
                     "month_index", "index_to_label", "roll_min_adaptive",
                     "ensure_dir"))
 invisible(clusterEvalQ(cl, suppressMessages({

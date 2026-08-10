@@ -17,6 +17,11 @@
 # into one binary container, zlib-compressed and base64-embedded; the browser
 # inflates it with DecompressionStream. A derived view: regenerating it never
 # touches panel or metric history.
+#
+# Credit throughout is credit_v2 — read from data/metrics under the name
+# `credit`, so everything downstream (planes, scales, top lists, payout
+# markers) is the shipped rule with no further branching. The retired v1
+# column stays in the metrics as an audit trail and is never read here.
 # ============================================================================
 
 source("config/config.R")
@@ -89,8 +94,8 @@ do_shard = function(s) {
   ce[, `:=`(r3 = parent_r3(h3), path = path_r6(h3), h3 = NULL)]
 
   hist = open_dataset(DATA_METRICS) |>
-    filter(shard == s) |> select(cell_id, month, m, credit) |> collect() |>
-    as.data.table()
+    filter(shard == s) |> select(cell_id, month, m, credit = credit_v2) |>
+    collect() |> as.data.table()
   if (nrow(hist) == 0) return(NULL)
   hist[ce, `:=`(r3 = i.r3, path = i.path), on = "cell_id"]
   ser = hist[is.finite(m), .(sum_m = sum(m), n_m = .N), by = .(r3, month)]
@@ -120,7 +125,7 @@ do_shard = function(s) {
 
   last = open_dataset(DATA_METRICS) |>
     filter(shard == s, month == latest) |>
-    select(cell_id, m, perf_short, perf_long, credit, eligible) |>
+    select(cell_id, m, perf_short, perf_long, credit = credit_v2, eligible) |>
     collect() |> as.data.table()
   last[ce, `:=`(r3 = i.r3, path = i.path), on = "cell_id"]
   last[, elig := !is.na(eligible) & eligible]
@@ -478,8 +483,8 @@ do_series_shard = function(s) {
   }
 
   hist = open_dataset(DATA_METRICS) |>
-    filter(shard == s) |> select(cell_id, month, m, credit) |> collect() |>
-    as.data.table()
+    filter(shard == s) |> select(cell_id, month, m, credit = credit_v2) |>
+    collect() |> as.data.table()
   hist = hist[is.finite(m)]
   if (nrow(hist) == 0) return(NULL)
   hist[ce, `:=`(r3 = i.r3, path = i.path), on = "cell_id"]

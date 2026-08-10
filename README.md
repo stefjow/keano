@@ -19,9 +19,9 @@ incentive-driven system. Successor to the city-based
 | Workhorse series | `m` = trailing 12-month mean of monthly NO₂ | Deseasonalized *by construction* (full-year window); smooths retrieval noise; causal |
 | Short-term score | `perf_short` = YoY change of `m` | Causal, comparable across cells |
 | Long-term score | `perf_long` = annualized change of `m` vs. the cell's first full year | Causal |
-| Credit baseline | Own-history minimum of `m` over the window **t−60 … t−12 months** ("best year that ended at least a year ago") | Expiring ratchet without the COVID trap: records age out after 5 years, so every cell periodically has something to earn. Excluding the freshest year keeps the baseline from chasing `m` down month by month — steady improvers keep clearing the margin (total credit ≈ proportional to total reduction, fast or slow), while a one-off drop stops earning once its low year ages into the baseline |
-| Credit | Relative undercut `(B − m)/B`, gated at a **2% noise margin** | %-based, so clean and dirty cells compete symmetrically; margin avoids paying for retrieval noise |
-| Credit weighting | Cell credit × `clamp01((U₄ + margin)/(2·margin))`, where `U₄` is the res-4 parent's (~1,770 km², mean of children `m`) undercut of its own identically constructed baseline | NO₂ is transport-driven at 36 km² (lifetime ~hours, plumes travel tens of km): a cell can hit a record low because this year's winds moved the neighbour's plume, not because anyone reduced. Full credit only when the neighbourhood is also ≥ margin below its baseline; zero when it is ≥ margin above. City-wide improvements pass untouched (parent moves with the cells); isolated implausible records don't — measured on real data, 5 of the June-2026 top 15 sat on parents 24–126% *above* baseline and are zeroed, while 84–96% of monthly credit volume is retained. `is_record` stays unweighted (the record is a fact; the payout is conditioned) |
+| Credit baseline | Own-history minimum of `m` over the window **t−60 … t−1 months** — the lowest the cell has been in five years, up to and including last month | Expiring ratchet: records age out after 5 years, so every cell periodically has something to earn. Including the freshest months is what makes each reduction paid **once**: a cell has to keep beating its own best, and over a full record its credit sums to ≈ `log(m_first / m_last)` — the same total for the same total reduction, fast or slow (measured: median ratio 1.00 unweighted). The window must end at t−1, not t; at t the baseline is ≤ `m` by construction and nothing can ever earn |
+| Credit | Relative undercut `(B − m)/B`, gated at a **1.2% noise margin** | %-based, so clean and dirty cells compete symmetrically; margin avoids paying for retrieval noise. 1.2% rather than 2% because the comparison is against a baseline that may be one month old, not a year old: measured on flat-trend cells, p95 `|Δlog m|` at lag 1 is 1.63× smaller than at lag 12, so 2% / 1.63 ≈ 1.2% |
+| Credit weighting | Cell credit × `clamp01((U₄ + ramp)/(2·ramp))` with `ramp = 2%`, where `U₄` is the res-4 parent's (~1,770 km², mean of children `m`) undercut of its own identically constructed baseline. The ramp is a **separate constant from the credit margin** — narrowing it in step with the margin would sharpen the plume guard exactly as the baseline change makes it less necessary (a fluke low now becomes the cell's own baseline next month, so it is paid once instead of for a year) | NO₂ is transport-driven at 36 km² (lifetime ~hours, plumes travel tens of km): a cell can hit a record low because this year's winds moved the neighbour's plume, not because anyone reduced. Full credit only when the neighbourhood is also ≥ margin below its baseline; zero when it is ≥ margin above. City-wide improvements pass untouched (parent moves with the cells); isolated implausible records don't. It binds harder against the current baseline than it did against the year-old one — full weight on 63% of paid months rather than 79%, with 8% zeroed outright — which is also why the sum above reaches ≈ 0.85·`log(m_first/m_last)` rather than 1.00. `is_record` stays unweighted (the record is a fact; the payout is conditioned) |
 | Eligibility | `m ≥ NO2_FLOOR` (default 30 µmol/m²) | %-changes are meaningless at background noise level; panel still keeps all cells (shipping lanes included) |
 
 ### History consistency (append-only contract)
@@ -115,8 +115,28 @@ copy of these values with it.
 ## Tuning knobs
 
 All in `config/config.R`: `H3_RESOLUTION`, `WINDOW_MONTHS`,
-`BASELINE_WINDOW_MONTHS`, `CREDIT_MARGIN`, `NO2_FLOOR`, `TOP_N`, and
-`N_WORKERS` (scripts 02–05 parallelize over chunks/months/shards).
+`BASELINE_WINDOW_MONTHS`, `NO2_FLOOR`, `TOP_N`, and `N_WORKERS` (scripts
+02–05 parallelize over chunks/months/shards). The shipped credit rule is
+`CREDIT_V2_EXCLUDE_MONTHS` / `CREDIT_V2_MARGIN` / `CREDIT_V2_PARENT_RAMP`.
+
+### The retired credit rule
+
+`BASELINE_EXCLUDE_MONTHS = 12` and `CREDIT_MARGIN = 0.02` still drive a
+second set of columns — `baseline`, `parent_under`, `credit`, `is_record` —
+computed beside the shipped ones in script 04. Nothing user-facing reads
+them; they are the audit trail for what was published before the rule
+changed, and `monthly_summary.csv` keeps their totals as `*_v1`.
+
+That rule held the baseline back a year, so a cell was paid the *cumulative*
+gap every month until its own low aged in. Totals therefore ran **~7×
+higher** for the same reductions, and — contrary to the intent recorded when
+it was designed — it did not deliver pace-independence: measured across
+48k earning cells, v2's share of v1 credit is 11% for cells improving faster
+than 8%/yr and 16% for cells flatter than 1%/yr, i.e. v1 systematically
+over-paid fast improvers. It also kept paying for up to a year after a cell
+had stopped improving, which is what prompted the change. The switch moved
+13% of credit volume and 42% of the top-1000 cells; the same or slightly more
+cells earn (48.5k vs 45.8k on the two shards measured).
 Rankings and composites are **derived views** — they can be redefined at any
 time without touching the stored panel or metric history. So is the map:
 script 06 renders it (MapLibre + h3-js, dark basemap) with res-3 hexagons
