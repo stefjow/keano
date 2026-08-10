@@ -368,46 +368,44 @@
       <button id="about-close" aria-label="Close about">×</button>
     </div>
     <div class="about-body">
-      <h3>What is this?</h3>
+      <h3>What it measures</h3>
       <p>keano tracks NO₂ pollution in every ~36 km² hexagon on Earth and
       scores how well each one is cleaning up, month by month since
-      May 2018. NO₂ comes mostly from combustion, which makes it a decent
+      May 2018. Most NO₂ comes from combustion, which makes it a reasonable
       proxy for local air pollution.</p>
 
       <h3>The data</h3>
       <p>Monthly global NO₂ from Sentinel-5P/TROPOMI (Terrascope L3,
       0.02° grid, quality-filtered), averaged into H3 resolution-6
       hexagons with coverage weighting. The values are tropospheric column
-      densities in µmol/m²: the total NO₂ in the air column above a hex,
-      not what you would measure at the surface.</p>
+      densities in µmol/m², counting all the NO₂ in the air above a hex, so
+      they are not surface concentrations.</p>
 
       <h3>The base series: m</h3>
       <p>Everything is computed from <b>m</b>, the average NO₂ over the
-      trailing 12 months. Averaging a full year at a time removes the
-      seasonal cycle and smooths out retrieval noise. m only ever looks at
-      past months, so adding a new month never changes an old one — the
-      measurements behind a closed month stay as they were.</p>
-      <p>The scoring rules on top of m can change, though. When one does it
-      is recomputed across the whole record rather than applied only going
-      forward, so every month is always scored the same way; the credit rule
-      was last changed in August 2026, and figures published before then were
-      larger for the same reductions.</p>
+      trailing 12 months. A full-year window removes the seasonal cycle and
+      smooths out retrieval noise. m only ever looks at past months, so
+      adding a new month leaves the closed ones untouched.</p>
+      <p>The scoring rules on top of m do change. When one changes it is
+      recomputed across the whole record, so every month is scored the same
+      way. The credit rule last changed in August 2026; figures published
+      before then were larger for the same reductions.</p>
 
       <h3>The layers</h3>
       <p><b>Change</b> shows how fast m is moving, over three horizons:
       <i>overall</i> is the annualized rate since the cell's first full year,
       <i>5 years</i> the same rate over a fixed five-year window, and
-      <i>last year</i> simply compares m to its value twelve months earlier.
-      The three can disagree, and that is the point — the overall figure
-      averages in 2019–2021, which were flat, so a cell improving quickly of
-      late looks slower there than in the five-year view.</p>
+      <i>last year</i> compares m to its value twelve months earlier. The
+      three often disagree. The overall figure averages in 2019–2021, which
+      were flat, so a cell that has improved mostly since then looks slower
+      there than in the five-year view.</p>
       <p>The five-year and last-year views need m from that far back, and in the
       far north there often isn't any: polar night leaves too few observed
       months for a 12-month mean, so those hexes stay unfilled. The overall view
-      has no gaps because it measures from whenever each cell's record actually
+      has no gaps, since it measures from wherever each cell's record actually
       starts.</p>
       <p><b>Credit</b> shows credit paid, either in the latest month or summed
-      over the last twelve months or the whole record; it is explained below.
+      over the last twelve months or the whole record; see below.
       <b>NO₂</b> shows the current level of m.</p>
 
       <h3>Credits</h3>
@@ -417,37 +415,36 @@
       undercut it by more than a 1.2% noise margin. Credit is the
       relative undercut (B − m)/B, so a clean cell and a dirty cell earn
       the same for the same percentage improvement. Records expire after
-      five years, which means every cell periodically has something new
-      to earn.</p>
+      five years, so every cell periodically has something to earn
+      again.</p>
       <p>Because the baseline includes the most recent month, a cell has
-      to keep beating its own best to keep earning — you are paid once
-      for each step down, not repeatedly for a step you took a year ago.
-      Over a cell's whole record the credit it has earned adds up to
-      roughly log(first m ÷ latest m): the same total for the same total
-      reduction, whether it arrived quickly or slowly.</p>
-      <p>A step smaller than the margin is not lost, just banked: the
+      to keep beating its own best to keep earning, and each step down is
+      paid once. Over a cell's whole record the credit adds up to roughly
+      log(first m ÷ latest m), the same total for the same total
+      reduction however fast it arrived.</p>
+      <p>A step smaller than the margin is banked rather than lost: the
       undercut is measured from the level a cell was last actually paid
       at, so several small drops accumulate until together they clear the
-      margin. The same applies to a month zeroed by the neighbourhood
-      check below — it defers the payment rather than cancelling it.</p>
-      <p>Two extra rules apply. Only cells with m ≥ 30 µmol/m² are
-      scored, because percent changes mean nothing at background noise
-      level. And since NO₂ travels tens of kilometres, a record low can
-      simply be the neighbour's plume blowing somewhere else this year,
+      margin. A month zeroed by the neighbourhood check below is deferred
+      the same way.</p>
+      <p>Two further rules. Only cells with m ≥ 30 µmol/m² are
+      scored, since percent changes mean little at background noise
+      level. And because NO₂ travels tens of kilometres, a record low can
+      just be the neighbour's plume blowing somewhere else this year,
       so full credit is only paid when the surrounding ~1,770 km² region
       is also below its own baseline. Isolated implausible records are
       zeroed.</p>
       <p>On the hover chart, the dots on the trend line mark the months a hex
       was actually paid, brighter for more credit, with the exact figure in
       the tooltip. The line under the chart gives the count and the best
-      month. Expect gaps: a hex is paid when it steps down, not for every
-      month it spends at a low level.</p>
+      month. The dots are usually sparse, since a hex earns by stepping
+      down and not by sitting at an already-low level.</p>
 
       <h3>The site</h3>
-      <p>The whole thing is static files, no backend. Metrics are packed
-      into binary planes, and the per-hex trend chart is fetched with a
-      ~200-byte HTTP range request on hover. Built with MapLibre GL
-      and H3. Clicking a hex's ⬡ code copies a link that jumps straight
+      <p>Static files only, no backend. Metrics are packed into binary
+      planes, and the per-hex trend chart is fetched with a ~200-byte
+      HTTP range request on hover. Built with MapLibre GL and H3.
+      Clicking a hex's ⬡ code copies a link that jumps straight
       to it.</p>
 
       <p class="about-attrib">Contains modified Copernicus Sentinel-5P
