@@ -115,6 +115,10 @@ do_shard = function(s) {
   # so they are reduced across shards before that second pass runs. Grouping
   # only `paid` keeps this cheap — 0.2-0.5% of rows carry any credit.
   crh3 = paid[, .(cr = sum(credit)), by = .(r3, month)]
+  # per-cell window sums: the credit layer offers last-month / trailing-12 /
+  # all-time at every tier, not just in the res-3 top list
+  cellwin = paid[, .(cr_y = sum(credit[month %in% win12]),
+                     cr_a = sum(credit)), by = cell_id]
   mx = function(v) if (!length(v)) 0 else max(v)
   crmax = c(
     r3 = mx(crh3$cr),
@@ -125,10 +129,13 @@ do_shard = function(s) {
 
   last = open_dataset(DATA_METRICS) |>
     filter(shard == s, month == latest) |>
-    select(cell_id, m, perf_short, perf_long, credit = credit_v3, eligible) |>
+    select(cell_id, m, perf_short, perf_long, perf_5y, credit = credit_v3,
+           eligible) |>
     collect() |> as.data.table()
   last[ce, `:=`(r3 = i.r3, path = i.path), on = "cell_id"]
   last[, elig := !is.na(eligible) & eligible]
+  last[cellwin, `:=`(cr_y = i.cr_y, cr_a = i.cr_a), on = "cell_id"]
+  last[is.na(cr_y), cr_y := 0][is.na(cr_a), cr_a := 0]
 
   # YoY/trend aggregate over ALL cells with finite values so the layers have
   # full coverage at every tier (res 6 shows raw per-cell values); credit
@@ -139,12 +146,16 @@ do_shard = function(s) {
     n_y   = sum(is.finite(perf_short)),
     sum_t = sum(perf_long[is.finite(perf_long)]),
     n_t   = sum(is.finite(perf_long)),
+    sum_f = sum(perf_5y[is.finite(perf_5y)]),
+    n_f   = sum(is.finite(perf_5y)),
     credit = sum(credit, na.rm = TRUE),    n_el = sum(elig),
+    cr_y = sum(cr_y), cr_a = sum(cr_a),
     n_cr  = sum(!is.na(credit) & credit > 0)
   ), by = r3]
 
   fine = last[is.finite(m),
-              .(r3, path, m, perf_short, perf_long, credit, elig)]
+              .(r3, path, m, perf_short, perf_long, perf_5y, credit,
+                cr_y, cr_a, elig)]
   list(ser = ser, r3last = r3last, fine = fine, crwin = crwin,
        crh3 = crh3, crmax = crmax)
 }
@@ -192,7 +203,9 @@ agg_tier = function(key) {
     m = mean(m),
     y = mean(perf_short[is.finite(perf_short)]),   # NaN if none
     t = mean(perf_long[is.finite(perf_long)]),
+    f = mean(perf_5y[is.finite(perf_5y)]),
     credit = sum(credit, na.rm = TRUE),
+    cr_y = sum(cr_y), cr_a = sum(cr_a),
     n_el = sum(elig)
   ), keyby = c("r3i", key)]
 }
@@ -208,7 +221,8 @@ clamp01 = function(t) pmin(pmax(t, 0), 1)
 r3last[, `:=`(
   m3 = ifelse(n_m > 0, sum_m / n_m, NA_real_),
   y3 = ifelse(n_y > 0, sum_y / n_y, NA_real_),
-  t3 = ifelse(n_t > 0, sum_t / n_t, NA_real_)
+  t3 = ifelse(n_t > 0, sum_t / n_t, NA_real_),
+  f3 = ifelse(n_f > 0, sum_f / n_f, NA_real_)
 )]
 
 m_pool = c(r3last$m3, fine$m)
@@ -220,16 +234,23 @@ sym_y = signif(as.numeric(quantile(abs(c(r3last$y3, fine[elig == TRUE, perf_shor
                                    0.98, na.rm = TRUE)), 2)
 sym_t = signif(as.numeric(quantile(abs(c(r3last$t3, fine[elig == TRUE, perf_long])),
                                    0.98, na.rm = TRUE)), 2)
+sym_f = signif(as.numeric(quantile(abs(c(r3last$f3, fine[elig == TRUE, perf_5y])),
+                                   0.98, na.rm = TRUE)), 2)
 # true max, not a quantile: the sqrt scale keeps low-end resolution anyway,
 # and clamping would truncate exactly the cells the top list showcases
 cr_max = function(v) {
   hi = suppressWarnings(max(v[v > 0], na.rm = TRUE))
   if (!is.finite(hi) || hi <= 0) 1 else hi
 }
+zna = function(v) fifelse(is.na(v), 0, v)
+rel_gap = function(a, b) { d = sum(abs(zna(a) - zna(b))); d / max(sum(zna(a)), 1) }
 cr3_max = cr_max(r3last$credit)
 cr4_max = cr_max(t4$credit)
 cr5_max = cr_max(t5$credit)
 cr6_max = cr_max(fine$credit)
+# the window sums have their own, much larger maxima
+cy_max = c(cr_max(crwin$credit_y), cr_max(t4$cr_y), cr_max(t5$cr_y), cr_max(fine$cr_y))
+ca_max = c(cr_max(crwin$credit_a), cr_max(t4$cr_a), cr_max(t5$cr_a), cr_max(fine$cr_a))
 
 t_m   = function(v) clamp01((log10(pmax(v, 1e-6)) - lmin) / (lmax - lmin))
 t_sym = function(v, s) clamp01((v / s + 1) / 2)
@@ -293,8 +314,14 @@ add_sec("r3ids", charToRaw(paste(r3_ids, collapse = "")))
 add_sec("tm3", delta_u8(lev_u8(t_m(r3last$m3))))
 add_sec("ty3", delta_u8(lev_u8(t_sym(r3last$y3, sym_y))))
 add_sec("tt3", delta_u8(lev_u8(t_sym(r3last$t3, sym_t))))
-add_sec("tc3", delta_u8(lev_u8(fifelse(!is.na(r3last$n_el) & r3last$n_el > 0,
+add_sec("t53", delta_u8(lev_u8(t_sym(r3last$f3, sym_f))))
+elig3 = !is.na(r3last$n_el) & r3last$n_el > 0
+add_sec("tc3", delta_u8(lev_u8(fifelse(elig3,
                                        t_cr(r3last$credit, cr3_max), NA_real_))))
+add_sec("cy3", delta_u8(lev_u8(fifelse(elig3, t_cr(zna(crwin$credit_y), cy_max[1]),
+                                       NA_real_))))
+add_sec("ca3", delta_u8(lev_u8(fifelse(elig3, t_cr(zna(crwin$credit_a), ca_max[1]),
+                                       NA_real_))))
 add_sec("r3series", delta_u16_raw(lev_u16(t_ser)))
 # exact regional credit for the viewport-aware "top regions" table
 add_sec("cr3f", raw_bin(as.numeric(fifelse(is.na(r3last$credit), 0,
@@ -302,11 +329,19 @@ add_sec("cr3f", raw_bin(as.numeric(fifelse(is.na(r3last$credit), 0,
 add_sec("nc3", raw_bin(fifelse(is.na(r3last$n_cr), 0L, r3last$n_cr), 2L))
 # same, summed over the trailing-12 / all-time windows (scope toggle);
 # counts are distinct cells credited within the window
-add_sec("cr3y", raw_bin(as.numeric(fifelse(is.na(crwin$credit_y), 0,
-                                           crwin$credit_y)), 4L))
+# res-3 window sums come from crwin, which walks the whole history. The
+# per-cell route (r3last$cr_y/cr_a, summed over latest-month rows) is very
+# slightly smaller: script 04 emits no row for a cell that has neither an
+# observation nor an m in a month, so a cell with credit history but nothing in
+# the latest month is absent from `last`. The finer tiers can only ever use the
+# per-cell route — their bitmaps are built from latest-month cells — so a gap of
+# this size between res-3 and res-4/5/6 is expected. Bounded, not asserted
+# equal, so a real aggregation error still trips it.
+stopifnot(rel_gap(crwin$credit_y, r3last$cr_y) < 1e-3,
+          rel_gap(crwin$credit_a, r3last$cr_a) < 1e-3)
+add_sec("cr3y", raw_bin(as.numeric(zna(crwin$credit_y)), 4L))
 add_sec("nc3y", raw_bin(fifelse(is.na(crwin$n_cr_y), 0L, crwin$n_cr_y), 2L))
-add_sec("cr3a", raw_bin(as.numeric(fifelse(is.na(crwin$credit_a), 0,
-                                           crwin$credit_a)), 4L))
+add_sec("cr3a", raw_bin(as.numeric(zna(crwin$credit_a)), 4L))
 add_sec("nc3a", raw_bin(fifelse(is.na(crwin$n_cr_a), 0L, crwin$n_cr_a), 2L))
 
 # res-3 credit history as a flat event list: one (cell, month) key plus one
@@ -322,17 +357,22 @@ add_sec("cr3hv", as.raw(lev_crh(crh3$cr, crh_max[["r3"]])))
 message("Credit history: ", format(nrow(crh3), big.mark = ","),
         " res-3 events (", round(100 * nrow(crh3) / (nP * nm), 2), "% of hex-months)")
 
-tier_sec = function(r, tt, key, B, crmax) {
+tier_sec = function(r, tt, key, B, crmax, i) {
   add_sec(paste0("bm", r), bitmap_raw(tt$r3i, key, B))
   add_sec(paste0("tm", r), delta_u8(lev_u8(t_m(tt$m))))
   add_sec(paste0("ty", r), delta_u8(lev_u8(t_sym(tt$y, sym_y))))
   add_sec(paste0("tt", r), delta_u8(lev_u8(t_sym(tt$t, sym_t))))
-  add_sec(paste0("tc", r), delta_u8(lev_u8(fifelse(tt$n_el > 0,
-                                                   t_cr(tt$credit, crmax),
+  add_sec(paste0("t5", r), delta_u8(lev_u8(t_sym(tt$f, sym_f))))
+  ok = tt$n_el > 0
+  add_sec(paste0("tc", r), delta_u8(lev_u8(fifelse(ok, t_cr(tt$credit, crmax),
+                                                   NA_real_))))
+  add_sec(paste0("cy", r), delta_u8(lev_u8(fifelse(ok, t_cr(tt$cr_y, cy_max[i]),
+                                                   NA_real_))))
+  add_sec(paste0("ca", r), delta_u8(lev_u8(fifelse(ok, t_cr(tt$cr_a, ca_max[i]),
                                                    NA_real_))))
 }
-tier_sec(4, t4, t4$p4, 1L, cr4_max)
-tier_sec(5, t5, t5$p5, 8L, cr5_max)
+tier_sec(4, t4, t4$p4, 1L, cr4_max, 2L)
+tier_sec(5, t5, t5$p5, 8L, cr5_max, 3L)
 # res 6: raw per-cell values; credit is the cell's own relative undercut,
 # defined (>= 0) for eligible cells and NA (transparent) otherwise.
 # Levels kept un-delta'd too: the web bundle re-deltas them per chunk.
@@ -340,10 +380,13 @@ lev6 = list(
   tm = lev_u8(t_m(fine$m)),
   ty = lev_u8(t_sym(fine$perf_short, sym_y)),
   tt = lev_u8(t_sym(fine$perf_long, sym_t)),
+  t5 = lev_u8(t_sym(fine$perf_5y, sym_f)),
   tc = lev_u8(fifelse(fine$elig,
                       t_cr(fifelse(is.na(fine$credit), 0, fine$credit),
                            cr6_max),
-                      NA_real_))
+                      NA_real_)),
+  cy = lev_u8(fifelse(fine$elig, t_cr(fine$cr_y, cy_max[4]), NA_real_)),
+  ca = lev_u8(fifelse(fine$elig, t_cr(fine$cr_a, ca_max[4]), NA_real_))
 )
 add_sec("bm6", bitmap_raw(fine$r3i, fine$path, 64L))
 for (pl in names(lev6)) add_sec(paste0(pl, 6), delta_u8(lev6[[pl]]))
@@ -369,6 +412,11 @@ meta = list(
   months = months_all,
   scales = list(m = list(lmin = lmin, lmax = lmax),
                 yoy = list(sym = sym_y), trend = list(sym = sym_t),
+                trend5 = list(sym = sym_f),
+                credit3y = list(max = cy_max[1]), credit4y = list(max = cy_max[2]),
+                credit5y = list(max = cy_max[3]), credit6y = list(max = cy_max[4]),
+                credit3a = list(max = ca_max[1]), credit4a = list(max = ca_max[2]),
+                credit5a = list(max = ca_max[3]), credit6a = list(max = ca_max[4]),
                 credit3 = list(max = cr3_max), credit4 = list(max = cr4_max),
                 credit5 = list(max = cr5_max), credit6 = list(max = cr6_max),
                 # history maxima, for the chart's credit-payout markers
@@ -426,8 +474,8 @@ concat_raw = function(lst) {
   list(bin = do.call(c, unname(lst)), manifest = man)
 }
 concat_file = function(names) concat_raw(sections[names])
-core = concat_file(c("r3ids", "tm3", "ty3", "tt3", "tc3", "cr3f", "nc3",
-                     "cr3y", "nc3y", "cr3a", "nc3a"))
+core = concat_file(c("r3ids", "tm3", "ty3", "tt3", "t53", "tc3", "cy3", "ca3",
+                     "cr3f", "nc3", "cr3y", "nc3y", "cr3a", "nc3a"))
 # series.bin carries the res-3 m history and the res-3 credit events together:
 # both exist only to draw the region chart, so they share its lazy fetch.
 seriesf = concat_file(c("r3series", "cr3hk", "cr3hv"))
@@ -611,8 +659,10 @@ message("Per-hex credit: ",
                                        big.mark = ",")))
 
 # --- Tier files + res-6 chunks (they carry the credit-count planes) -----------
-t4f = concat_raw(c(sections[c("bm4", "tm4", "ty4", "tt4", "tc4")], list(k4 = k4)))
-t5f = concat_raw(c(sections[c("bm5", "tm5", "ty5", "tt5", "tc5")], list(k5 = k5)))
+t4f = concat_raw(c(sections[c("bm4", "tm4", "ty4", "tt4", "t54",
+                              "tc4", "cy4", "ca4")], list(k4 = k4)))
+t5f = concat_raw(c(sections[c("bm5", "tm5", "ty5", "tt5", "t55",
+                              "tc5", "cy5", "ca5")], list(k5 = k5)))
 write_bin_gz(t4f$bin, file.path(wdata, "t4.bin"))
 write_bin_gz(t5f$bin, file.path(wdata, "t5.bin"))
 

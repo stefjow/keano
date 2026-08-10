@@ -50,6 +50,16 @@ BASELINE_EXCLUDE_MONTHS = 12    # ...excluding the freshest year, so the baselin
 CREDIT_MARGIN           = 0.02  # relative undercut must exceed this noise gate
 NO2_FLOOR               = 30    # µmol/m²; cells with m below are not eligible
 
+# Window for the medium-horizon trend layer (perf_5y). Same 60 months as the
+# credit baseline, but deliberately its OWN constant: that one is the credit
+# expiry, and changing it must not silently redefine a display layer.
+# Why it exists alongside perf_long: perf_long anchors on the cell's first year
+# and its window therefore grows forever (7.2 years as of 2026-06). Measured on
+# 58k eligible cells, the two disagree by more than 1pp/yr for 66% of cells and
+# on the direction of travel for 11.4% — perf_long averages in the 2019-2021
+# COVID dip and rebound, so it understates recent progress by ~1.6pp/yr.
+TREND_WINDOW_MONTHS     = 60
+
 # --- The shipped credit rule (credit_v3) ---------------------------------------
 # Script 04 computes three generations side by side; only the newest is read
 # downstream. These constants drive v2 and v3 both — v3 differs from v2 only in

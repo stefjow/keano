@@ -19,6 +19,7 @@ incentive-driven system. Successor to the city-based
 | Workhorse series | `m` = trailing 12-month mean of monthly NO₂ | Deseasonalized *by construction* (full-year window); smooths retrieval noise; causal |
 | Short-term score | `perf_short` = YoY change of `m` | Causal, comparable across cells |
 | Long-term score | `perf_long` = annualized change of `m` vs. the cell's first full year | Causal |
+| Medium-term score | `perf_5y` = the same annualized rate over a fixed `TREND_WINDOW_MONTHS` (60) window | `perf_long`'s window grows without limit — 7.2 years as of 2026-06 — so its meaning drifts as the record lengthens, and it averages in the 2019–2021 COVID dip and rebound. Measured on 58k eligible cells the two disagree by >1pp/yr for 66% of cells and on the *direction* for 11.4%, with `perf_long` understating recent progress by ~1.6pp/yr at the median. Its own constant, not the credit baseline's — that one is an expiry window and must not silently redefine a display layer |
 | Credit baseline | The level the cell was **last actually paid at**, falling back to its own minimum `m` over **t−60 … t−1** when no payment is live (never paid, or the last one is older than the 5-year expiry) | Expiring ratchet: records age out after 5 years, so every cell periodically has something to earn. Including the freshest months is what makes each reduction paid **once**: a cell has to keep beating its own best, and over a full record its credit sums to ≈ `log(m_first / m_last)` — the same total for the same total reduction, fast or slow. The window must end at t−1, not t; at t the baseline is ≤ `m` by construction and nothing can ever earn. Measuring from the last *paid* level rather than the lowest reached means a descent taken in steps each below the margin accumulates instead of being discarded — measured, that lifts the sum from 0.77 to 0.87 of `log(m_first/m_last)` and pays ~12% more to exactly the same cells. It also makes the plume guard below a deferral rather than a forfeit: a blocked undercut stays on the books until the neighbourhood check passes |
 | Credit | Relative undercut `(B − m)/B`, gated at a **1.2% noise margin**, where `B` is that reference | %-based, so clean and dirty cells compete symmetrically; margin avoids paying for retrieval noise. 1.2% rather than 2% because the comparison is against a baseline that may be one month old, not a year old: measured on flat-trend cells, p95 `|Δlog m|` at lag 1 is 1.63× smaller than at lag 12, so 2% / 1.63 ≈ 1.2% |
 | Credit weighting | Cell credit × `clamp01((U₄ + ramp)/(2·ramp))` with `ramp = 2%`, where `U₄` is the res-4 parent's (~1,770 km², mean of children `m`) undercut of its own identically constructed baseline. The ramp is a **separate constant from the credit margin** — narrowing it in step with the margin would sharpen the plume guard exactly as the baseline change makes it less necessary (a fluke low now becomes the cell's own baseline next month, so it is paid once instead of for a year) | NO₂ is transport-driven at 36 km² (lifetime ~hours, plumes travel tens of km): a cell can hit a record low because this year's winds moved the neighbour's plume, not because anyone reduced. Full credit only when the neighbourhood is also ≥ margin below its baseline; zero when it is ≥ margin above. City-wide improvements pass untouched (parent moves with the cells); isolated implausible records don't. It binds harder against the current baseline than it did against the year-old one — full weight on 63% of paid months rather than 79%, with 8% zeroed outright — which is the remaining reason the sum above reaches ≈ 0.87·`log(m_first/m_last)` rather than 1.00: a month paid at partial weight still resets the reference, so the unpaid fraction is forfeited. `is_record` stays unweighted (the record is a fact; the payout is conditioned) |
@@ -56,7 +57,7 @@ rows; closed months never change. Three rules keep that true:
 scripts/01_download.R      Terrascope monthly GeoTIFFs (NO2 + weight) -> data/raw/ (append-only)
 scripts/02_build_lookup.R  one-time: pixel centers -> H3 res-6 cells -> data/lookup/
 scripts/03_build_panel.R   per new month: raster -> per-cell means -> data/panel/ (hive parquet)
-scripts/04_metrics.R       per shard: m, perf_short, perf_long, baseline, credit -> data/metrics/
+scripts/04_metrics.R       per shard: m, perf_short, perf_long, perf_5y, baseline, credit -> data/metrics/
 scripts/05_rankings.R      derived views: monthly records, top credits, summaries -> data/rankings/
 scripts/06_viz.R           latest month -> interactive H3 hexagon map -> data/viz/index.html
 scripts/07_publish.R       map + rankings CSVs + README -> PUBLISH_DIR (network share)
@@ -156,8 +157,12 @@ time without touching the stored panel or metric history. So is the map:
 script 06 renders it (MapLibre + h3-js, dark basemap) with res-3 hexagons
 globally — each carrying its full monthly `m` series, shown as a mouse-over
 trend panel — and full-coverage res-4/5/6 tiers as you zoom in (~0.3M /
-1.8M / 12.4M cells), with layers for NO₂ level, YoY, long-term trend, and
-credit. No per-cell ids, coordinates or geometry are shipped: each tier is
+1.8M / 12.4M cells). Three primary layers, two of which pick a horizon:
+**Change** (overall / 5-year / last-year rate), **Credit** (latest month /
+trailing 12 months / all time) and **NO₂** (the current level). The horizon is
+part of the layer key, so it round-trips through the deep-link hash
+(`#trend5`, `#credit12`, …) and the Credit horizon drives the top-regions list
+too, so map and table can never disagree about which window is on screen. No per-cell ids, coordinates or geometry are shipped: each tier is
 a per-res-3-parent occupancy bitmap plus delta-encoded quantized metric
 planes, and the browser reconstructs H3 ids and hexagon outlines for the
 current viewport only.

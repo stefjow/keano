@@ -283,6 +283,10 @@
   }
   .chart-block .chart { height: 74px; }
 
+  /* sub-selector: same control, one step quieter than the primary row */
+  .layers.sub { margin-top: 5px; border-color: var(--line); }
+  .layers.sub button { padding: 4px 2px; font-size: 11px; color: var(--muted); }
+  .layers.sub[hidden] { display: none; }
   .top-block .layers.scope { margin: 8px 0 4px; }
   .top-block .layers.scope button { padding: 4px 2px; font-size: 11.5px; }
   .top-block table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -387,10 +391,16 @@
       larger for the same reductions.</p>
 
       <h3>The layers</h3>
-      <p><b>Trend</b> is the annualized change of m since the cell's first
-      full year, <b>YoY</b> compares m to its value one year earlier, and
-      <b>NO₂</b> shows the current level of m. <b>Credit</b> is explained
-      below.</p>
+      <p><b>Change</b> shows how fast m is moving, over three horizons:
+      <i>overall</i> is the annualized rate since the cell's first full year,
+      <i>5 years</i> the same rate over a fixed five-year window, and
+      <i>last year</i> simply compares m to its value twelve months earlier.
+      The three can disagree, and that is the point — the overall figure
+      averages in 2019–2021, so a cell improving quickly of late looks slower
+      there than in the five-year view.</p>
+      <p><b>Credit</b> shows credit paid, either in the latest month or summed
+      over the last twelve months or the whole record; it is explained below.
+      <b>NO₂</b> shows the current level of m.</p>
 
       <h3>Credits</h3>
       <p>A cell earns credit when m drops below its own historical
@@ -446,6 +456,7 @@
   <div id="rail">
     <div id="layer-card">
       <div class="layers" role="group" aria-label="Map layer" id="layer-buttons"></div>
+      <div class="layers sub" role="group" aria-label="Horizon" id="sub-buttons"></div>
       <div class="legend">
         <span class="lab" id="legend-min"></span>
         <canvas id="legend-bar" width="150" height="10"></canvas>
@@ -470,7 +481,6 @@
           </div>
           <div class="top-block">
             <h3 id="top-title">Top regions</h3>
-            <div class="layers scope" role="group" aria-label="Credit window" id="scope-buttons"></div>
             <table id="top-table"></table>
             <p class="note" id="top-note"></p>
           </div>
@@ -657,7 +667,8 @@ function wholeTierChunk(T, r, sec, withCredit) {
               credBase: 0, loaded: false };
   fillChunk(T, c, sec.raw("bm" + r),
             { tm: sec.u8("tm" + r), ty: sec.u8("ty" + r),
-              tt: sec.u8("tt" + r), tc: sec.u8("tc" + r) },
+              tt: sec.u8("tt" + r), t5: sec.u8("t5" + r),
+              tc: sec.u8("tc" + r), cy: sec.u8("cy" + r), ca: sec.u8("ca" + r) },
             withCredit ? sec.raw("k" + r) : null);
   return c;
 }
@@ -682,7 +693,9 @@ function setupSingle(bin) {
   const sec = mkSections(bin, META.manifest);
   R3 = {
     ids: new TextDecoder("ascii").decode(sec.raw("r3ids")),
-    tm: sec.u8("tm3"), ty: sec.u8("ty3"), tt: sec.u8("tt3"), tc: sec.u8("tc3"),
+    tm: sec.u8("tm3"), ty: sec.u8("ty3"), tt: sec.u8("tt3"),
+    t5: sec.u8("t53"), tc: sec.u8("tc3"),
+    cy: sec.u8("cy3"), ca: sec.u8("ca3"),
     series: sec.u16("r3series")
   };
   finishR3(sec);
@@ -700,7 +713,9 @@ async function setupWebCore() {
                          WEB.files.core.manifest);
   R3 = {
     ids: new TextDecoder("ascii").decode(sec.raw("r3ids")),
-    tm: sec.u8("tm3"), ty: sec.u8("ty3"), tt: sec.u8("tt3"), tc: sec.u8("tc3"),
+    tm: sec.u8("tm3"), ty: sec.u8("ty3"), tt: sec.u8("tt3"),
+    t5: sec.u8("t53"), tc: sec.u8("tc3"),
+    cy: sec.u8("cy3"), ca: sec.u8("ca3"),
     series: null
   };
   finishR3(sec);
@@ -737,7 +752,7 @@ function requestChunks(T, list) {
       const bm = bytes.subarray(0, c.nR3 * T.B);
       const planes = {};
       let o = c.nR3 * T.B;
-      for (const nm of ["tm", "ty", "tt", "tc"]) {
+      for (const nm of ["tm", "ty", "tt", "t5", "tc", "cy", "ca"]) {
         planes[nm] = undelta8(bytes.subarray(o, o + c.nCells));
         o += c.nCells;
       }
@@ -858,10 +873,7 @@ const dec = {
   m:      t => Math.pow(10, S.m.lmin + t * (S.m.lmax - S.m.lmin)),
   yoy:    t => (t * 2 - 1) * S.yoy.sym,
   trend:  t => (t * 2 - 1) * S.trend.sym,
-  credit3: t => t * t * S.credit3.max,
-  credit4: t => t * t * S.credit4.max,
-  credit5: t => t * t * S.credit5.max,
-  credit6: t => t * t * S.credit6.max
+  trend5: t => (t * 2 - 1) * S.trend5.sym
 };
 /* Credit-history levels are 1..255 with no NA slot — a month is only listed
    when it was paid — against the tier's all-months maximum, so a hex that
@@ -875,9 +887,18 @@ const fmt = {
   m:      v => (v >= 100 ? v.toFixed(0) : v.toFixed(1)),
   yoy:    v => (v > 0 ? "+" : "") + (v * 100).toFixed(1) + "%",
   trend:  v => (v > 0 ? "+" : "") + (v * 100).toFixed(1) + "%",
-  credit3: sumFmt, credit4: sumFmt, credit5: sumFmt,
-  credit6: v => (v * 100).toFixed(1) + "%"
+  trend5: v => (v > 0 ? "+" : "") + (v * 100).toFixed(1) + "%"
 };
+/* 4 resolutions x 3 windows. Only res-6 last-month is a single cell's own
+   undercut and reads as a percentage; every other cell is a sum — over child
+   hexes, over months, or both. */
+for (const r of [3, 4, 5, 6]) {
+  for (const sfx of ["", "y", "a"]) {
+    const k = "credit" + r + sfx;
+    dec[k] = t => t * t * S[k].max;
+    fmt[k] = (r === 6 && sfx === "") ? (v => (v * 100).toFixed(1) + "%") : sumFmt;
+  }
+}
 function fmtCoord(lat, lng) {
   return Math.abs(lat).toFixed(2) + "°" + (lat >= 0 ? "N" : "S") + " " +
          Math.abs(lng).toFixed(2) + "°" + (lng >= 0 ? "E" : "W");
@@ -890,16 +911,44 @@ const RAMPS = {
   trend:  ["#4fd6c2", "#33978c", "#26424a", "#6b4a2a", "#c87a35", "#f09a4b"],
   credit: ["#13272c", "#155e56", "#27a08c", "#5fd6bd", "#c9fff1"]
 };
-const LAYERS = [
-  { key: "trend",  prop: "tt", label: "Trend",  title: "Long-term trend" },
-  { key: "yoy",    prop: "ty", label: "YoY",    title: "Year-over-year change" },
-  { key: "credit", prop: "tc", label: "Credit", title: "Credit" },
-  { key: "m",      prop: "tm", label: "NO₂",    title: "NO₂ level (12-month mean)" }
+/* the added horizons reuse their family's ramp — same quantity, different span */
+RAMPS.trend5 = RAMPS.trend;
+RAMPS.credit12 = RAMPS.creditAll = RAMPS.credit;
+/* Three primary layers, two of which pick a horizon. `activeLayer` stays the
+   flat effective key ("trend5", "credit12", …) so the paint expressions, scales
+   and hash keep one dimension instead of two. */
+const GROUPS = [
+  { key: "change", label: "Change", subs: [
+      { key: "trend",  prop: "tt", label: "overall",
+        title: "annualised change of m since the cell's first year" },
+      { key: "trend5", prop: "t5", label: "5 years",
+        title: "annualised change of m over the last 5 years" },
+      { key: "yoy",    prop: "ty", label: "last year",
+        title: "change of m vs 12 months earlier" } ] },
+  { key: "credit", label: "Credit", subs: [
+      { key: "credit",    prop: "tc", label: "last month",
+        title: "credit paid in the latest month" },
+      { key: "credit12",  prop: "cy", label: "12 months",
+        title: "credit paid over the trailing 12 months" },
+      { key: "creditAll", prop: "ca", label: "all time",
+        title: "credit paid over the whole record" } ] },
+  { key: "no2", label: "NO₂", subs: [
+      { key: "m", prop: "tm", label: "", title: "NO₂ level (12-month mean)" } ] }
 ];
+const LAYERS = GROUPS.flatMap(g => g.subs);
+const groupOf = key => GROUPS.find(g => g.subs.some(x => x.key === key));
+/* scale/format key: the credit layers are per-resolution and per-window */
+const scaleKey = (key, r) =>
+  key === "credit"    ? "credit" + r :
+  key === "credit12"  ? "credit" + r + "y" :
+  key === "creditAll" ? "credit" + r + "a" : key;
+const isChange = key => key === "yoy" || key === "trend" || key === "trend5";
 /* Hash routing: #<layer>, #<layer>/<h3-id> (deep link to a hex) or
    #<layer>/@<lat>,<lng>,<zoom> (deep link to a view) */
 const HASH = location.hash.slice(1).split("/");
 let activeLayer = LAYERS.some(l => l.key === HASH[0]) ? HASH[0] : "trend";
+/* which credit window the map and the top list are showing */
+let topScope = "month";
 const startHex = HASH[1] && h3.isValidCell(HASH[1]) ? HASH[1] : null;
 const startView = (() => {
   const m = HASH[1] && HASH[1].match(/^@(-?\d+\.?\d*),(-?\d+\.?\d*),(\d+\.?\d*)z?$/);
@@ -939,8 +988,7 @@ function fillExpr(key) {
 const tOfM = m => (Math.log10(m) - S.m.lmin) / (S.m.lmax - S.m.lmin);
 function opacityExpr(key, base) {
   const hover = ["boolean", ["feature-state", "hover"], false];
-  if (key !== "yoy" && key !== "trend")
-    return ["case", hover, 1, base];
+  if (!isChange(key)) return ["case", hover, 1, base];
   const faded = ["interpolate", ["linear"], ["get", "tm"],
                  tOfM(2), 0.06, tOfM(10), 0.25, tOfM(30), 0.55, tOfM(80), base];
   return ["case", hover, 1, faded];
@@ -970,7 +1018,7 @@ let fineRes3d = 4;                 // res the fine-3d height scale is set for
 const HMAX = { 3: 150000, 4: 50000, 5: 18000, 6: 7000 };   // meters ≈ 1.5× cell width
 function heightExpr(key, res) {
   const t = ["get", layerDef(key).prop];
-  const mag = (key === "yoy" || key === "trend")
+  const mag = isChange(key)
     ? ["*", ["abs", ["-", ["*", t, 2], 1]],
        ["interpolate", ["linear"], ["get", "tm"],
         tOfM(2), 0.05, tOfM(10), 0.25, tOfM(30), 0.6, tOfM(80), 1]]
@@ -1019,7 +1067,8 @@ function buildR3() {
       properties: {
         id,
         tm: lev2t8(R3.tm[j]), ty: lev2t8(R3.ty[j]),
-        tt: lev2t8(R3.tt[j]), tc: lev2t8(R3.tc[j])
+        tt: lev2t8(R3.tt[j]), t5: lev2t8(R3.t5[j]),
+        tc: lev2t8(R3.tc[j]), cy: lev2t8(R3.cy[j]), ca: lev2t8(R3.ca[j])
       },
       geometry: { type: "Polygon", coordinates: [hexRing(id)] }
     };
@@ -1232,7 +1281,8 @@ function updateFine() {
             properties: {
               id,
               tm: lev2t8(c.tm[li]), ty: lev2t8(c.ty[li]),
-              tt: lev2t8(c.tt[li]), tc: lev2t8(c.tc[li])
+              tt: lev2t8(c.tt[li]), t5: lev2t8(c.t5[li]),
+              tc: lev2t8(c.tc[li]), cy: lev2t8(c.cy[li]), ca: lev2t8(c.ca[li])
             },
             geometry: { type: "Polygon", coordinates: [hexRing(id)] }
           });
@@ -1602,42 +1652,55 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
 
 /* --- Layer switching + legend --------------------------------------------------- */
 const layerBtns = document.getElementById("layer-buttons");
-LAYERS.forEach(l => {
-  const b = document.createElement("button");
-  b.textContent = l.label;
-  b.title = l.title;
-  b.setAttribute("aria-pressed", String(l.key === activeLayer));
-  b.addEventListener("click", () => {
-    activeLayer = l.key;
-    layerBtns.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", "false"));
-    b.setAttribute("aria-pressed", "true");
-    applyLayerPaint(l.key);
-    drawLegend();
-    writeHash();
+const subBtns = document.getElementById("sub-buttons");
+/* remembers the horizon chosen per group, so switching away and back returns
+   to what you were looking at rather than resetting to the first option */
+const lastSub = {};
+GROUPS.forEach(g => { lastSub[g.key] = g.subs[0].key; });
+lastSub[groupOf(activeLayer).key] = activeLayer;
+
+function selectLayer(key, redraw) {
+  activeLayer = key;
+  const g = groupOf(key);
+  lastSub[g.key] = key;
+  if (CREDIT_SCOPE[key]) topScope = CREDIT_SCOPE[key];
+  layerBtns.querySelectorAll("button").forEach(x =>
+    x.setAttribute("aria-pressed", String(x.dataset.group === g.key)));
+  renderSubs(g);
+  applyLayerPaint(key);
+  drawLegend();
+  writeHash();
+  if (redraw) updateTopRegions();
+}
+function renderSubs(g) {
+  subBtns.textContent = "";
+  // a single unnamed option is not a choice — hide the row entirely
+  subBtns.hidden = g.subs.length < 2;
+  if (subBtns.hidden) return;
+  g.subs.forEach(sub => {
+    const b = document.createElement("button");
+    b.textContent = sub.label;
+    b.title = sub.title;
+    b.setAttribute("aria-pressed", String(sub.key === activeLayer));
+    b.addEventListener("click", () => selectLayer(sub.key, true));
+    subBtns.appendChild(b);
   });
+}
+GROUPS.forEach(g => {
+  const b = document.createElement("button");
+  b.textContent = g.label;
+  b.dataset.group = g.key;
+  b.setAttribute("aria-pressed", String(g.key === groupOf(activeLayer).key));
+  b.addEventListener("click", () => selectLayer(lastSub[g.key], true));
   layerBtns.appendChild(b);
 });
+renderSubs(groupOf(activeLayer));
 
-/* --- Top-list scope toggle (latest month / trailing 12 / all time) -------------- */
-let topScope = "month";
-const scopeBtns = document.getElementById("scope-buttons");
-[
-  { key: "month", label: monthName(META.month), title: "Paid credit in the latest month" },
-  { key: "12m", label: "12 months", title: "Paid credit summed over the trailing 12 months" },
-  { key: "all", label: "All time", title: "Paid credit summed over the full record" }
-].forEach(sc => {
-  const b = document.createElement("button");
-  b.textContent = sc.label;
-  b.title = sc.title;
-  b.setAttribute("aria-pressed", String(sc.key === topScope));
-  b.addEventListener("click", () => {
-    topScope = sc.key;
-    scopeBtns.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", "false"));
-    b.setAttribute("aria-pressed", "true");
-    updateTopRegions();
-  });
-  scopeBtns.appendChild(b);
-});
+/* The credit window is a single piece of state: the Credit sub-selector drives
+   both the map planes and the top list, so the two can never disagree about
+   which window is on screen. Selecting a non-credit layer leaves the list on
+   whichever window was last chosen. */
+const CREDIT_SCOPE = { credit: "month", credit12: "12m", creditAll: "all" };
 
 function hex2rgb(h) { return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); }
 function drawLegend() {
@@ -1654,7 +1717,7 @@ function drawLegend() {
   }
   for (let y = 0; y < cv.height; y++) c.putImageData(img, 0, y);
 
-  const key = activeLayer === "credit" ? "credit" + displayRes() : activeLayer;
+  const key = scaleKey(activeLayer, displayRes());
   document.getElementById("legend-min").textContent = fmt[key](dec[key](0));
   document.getElementById("legend-max").textContent = fmt[key](dec[key](1));
 }

@@ -12,6 +12,8 @@
  *                 (headless defaults to hover:none): hover previews, click
  *                 pins, the ⌖ chip releases without hiding or resizing the
  *                 panel, hex and viewport deep links;
+ *   layer control — the three primary layers, the horizons under Change and
+ *                 Credit, their scales and hash round-trip;
  *   top regions — the three credit-window scopes, and → flying to a hex in
  *                 every tier the map draws without leaving that tier;
  *   touch       — default headless (hover:none): tap pins, × dismisses.
@@ -249,12 +251,17 @@ async function desktopRun(browser, base) {
   const got = await vw.page.evaluate(() => {
     const c = window._keanoMap.getCenter();
     return { lat: c.lat, lng: c.lng, zoom: window._keanoMap.getZoom(),
-             yoy: [...document.querySelectorAll(".layers button")]
-                    .some(b => b.textContent === "YoY" && b.getAttribute("aria-pressed") === "true") };
+             /* the deep link carries the horizon, so both rows must reflect it */
+             layer: activeLayer,
+             group: [...document.querySelectorAll("#layer-buttons button")]
+                      .find(b => b.getAttribute("aria-pressed") === "true")?.textContent,
+             sub: [...document.querySelectorAll("#sub-buttons button")]
+                    .find(b => b.getAttribute("aria-pressed") === "true")?.textContent };
   });
   ok(Math.abs(got.lat - 40.4) < 0.05 && Math.abs(got.lng + 3.7) < 0.05 &&
-     Math.abs(got.zoom - 6.5) < 0.05 && got.yoy,
-     "viewport deep link restores layer + view");
+     Math.abs(got.zoom - 6.5) < 0.05 &&
+     got.layer === "yoy" && got.group === "Change" && got.sub === "last year",
+     "viewport deep link restores layer + view (" + got.group + "/" + got.sub + ")");
   await vw.page.evaluate(() => new Promise(r => {
     window._keanoMap.once("moveend", r);
     window._keanoMap.panBy([120, 0], { duration: 0 });
@@ -276,6 +283,28 @@ const TIER_ZOOM = [[4, 5.6], [5, 6.8], [6, 9.2]];
 const TIER_TITLE = { 4: "Top areas — in view", 5: "Top areas — in view",
                      6: "Top cells — in view" };
 
+/* the layer control is two rows: primary groups, then that group's horizons */
+const pickGroup = (page, label) => page.evaluate(g => {
+  const b = [...document.querySelectorAll("#layer-buttons button")]
+              .find(x => x.textContent === g);
+  if (b) b.click();
+  return !!b;
+}, label);
+const subLabels = page => page.$$eval("#sub-buttons button", bs =>
+  bs.map(b => b.textContent));
+const pickSub = (page, i) =>
+  page.evaluate(n => document.querySelectorAll("#sub-buttons button")[n].click(), i);
+const layerState = page => page.evaluate(() => ({
+  active: activeLayer,
+  group: [...document.querySelectorAll("#layer-buttons button")]
+           .find(b => b.getAttribute("aria-pressed") === "true")?.textContent,
+  sub: [...document.querySelectorAll("#sub-buttons button")]
+         .find(b => b.getAttribute("aria-pressed") === "true")?.textContent,
+  subHidden: document.getElementById("sub-buttons").hidden,
+  legend: document.getElementById("legend-min").textContent + " … " +
+          document.getElementById("legend-max").textContent
+}));
+
 const topState = page => page.evaluate(() => {
   const m = /[0-9a-f]{15}/.exec(document.getElementById("rp-h3").textContent);
   const ec = window.echarts && echarts.getInstanceByDom(document.getElementById("rp-chart"));
@@ -290,7 +319,7 @@ const topState = page => page.evaluate(() => {
     pinnedRes: m ? h3.getResolution(m[0]) : null,
     cred: document.getElementById("rp-cred").textContent,
     credDots: paid ? paid.data.length : 0,
-    scope: [...document.querySelectorAll("#scope-buttons button")]
+    scope: [...document.querySelectorAll("#sub-buttons button")]
              .find(b => b.getAttribute("aria-pressed") === "true")?.textContent
   };
 });
@@ -342,14 +371,15 @@ async function topRegionsRun(browser, base) {
   console.log("top regions (credit scopes + fly-to per tier):");
   const { page, errors } = await newPage(browser, base);
 
-  const scopes = await page.$$eval("#scope-buttons button", bs => bs.map(b => b.textContent));
+  ok(await pickGroup(page, "Credit"), "a Credit layer button exists");
+  const scopes = await subLabels(page);
   ok(scopes.length === 3, "three credit windows offered (" + scopes.join(" / ") + ")");
 
   /* Every scope fills the table, labels itself, and marks its own button. The
      windowed scopes stay res-3 by design — per-cell credit history isn't
      shipped — so they must say "Top regions" at any zoom. */
   for (let i = scopes.length - 1; i >= 0; i--) {
-    await page.evaluate(n => document.querySelectorAll("#scope-buttons button")[n].click(), i);
+    await pickSub(page, i);
     await settleTop(page);
     const st = await topState(page);
     ok(st.scope === scopes[i], "scope “" + scopes[i] + "” is the pressed button");
@@ -357,6 +387,9 @@ async function topRegionsRun(browser, base) {
     if (i > 0) ok(st.title.startsWith("Top regions"),
                   "windowed scope “" + scopes[i] + "” stays regional (" + st.title + ")");
   }
+
+  await pickSub(page, 0);   // back to last-month for the per-tier walk
+  await settleTop(page);
 
   /* Park on the highest-credit region on the planet, then walk down the tiers.
      Descending via → keeps the viewport centred on credited ground, so each
@@ -398,6 +431,76 @@ async function topRegionsRun(browser, base) {
   await page.close();
 }
 
+/* --- Layer control: three groups, and the horizons under two of them --------- */
+/* Guards the shape of the control and that each horizon actually paints its own
+   plane: a wrong prop or a missing scale shows up as an unchanged legend or a
+   blank map, neither of which the other runs would catch. */
+async function layerRun(browser, base) {
+  console.log("layer control (groups + horizons):");
+  const { page, errors } = await newPage(browser, base);
+
+  const groups = await page.$$eval("#layer-buttons button", bs => bs.map(b => b.textContent));
+  ok(groups.length === 3 && groups.join("/") === "Change/Credit/NO₂",
+     "three primary layers (" + groups.join(" / ") + ")");
+
+  const seen = new Map();
+  for (const [g, want] of [["Change", ["overall", "5 years", "last year"]],
+                           ["Credit", ["last month", "12 months", "all time"]]]) {
+    await pickGroup(page, g);
+    const subs = await subLabels(page);
+    ok(subs.join("/") === want.join("/"),
+       g + " offers " + want.length + " horizons (" + subs.join(" / ") + ")");
+    for (let i = 0; i < subs.length; i++) {
+      await pickSub(page, i);
+      const st = await layerState(page);
+      ok(st.group === g && st.sub === subs[i],
+         g + " → “" + subs[i] + "” is pressed (activeLayer=" + st.active + ")");
+      ok(/\d/.test(st.legend), g + " → “" + subs[i] + "” has a numeric legend (" + st.legend + ")");
+      seen.set(st.active, st.legend);
+      // the hash must round-trip the horizon, not just the group
+      const h = await page.evaluate(() => location.hash);
+      ok(h.startsWith("#" + st.active),
+         g + " → “" + subs[i] + "” writes #" + st.active + " (" + h + ")");
+    }
+  }
+  ok(seen.size === 6, "six distinct horizons visited (" + [...seen.keys()].join(", ") + ")");
+  // each horizon must have its own scale: identical legends would mean a shared plane
+  ok(new Set([...seen.values()]).size >= 4,
+     "horizons have distinct scales (" + new Set([...seen.values()]).size + " of 6 legends differ)");
+
+  await pickGroup(page, "NO₂");
+  const st = await layerState(page);
+  ok(st.subHidden, "NO₂ has no horizon row");
+  ok(st.active === "m", "NO₂ selects the m layer");
+
+  // returning to a group restores the horizon that was last used there
+  await pickGroup(page, "Change");
+  await pickSub(page, 1);
+  await pickGroup(page, "Credit");
+  await pickGroup(page, "Change");
+  ok((await layerState(page)).active === "trend5",
+     "switching away and back restores the last horizon");
+
+  ok(errors.length === 0, "no page errors / failed local requests" +
+     (errors.length ? " — " + errors.join("; ") : ""));
+  await page.close();
+
+  /* Cold load of a horizon deep link: the group row, the horizon row and the
+     paint all have to come back from the hash alone, not just after a click. */
+  for (const [key, group, sub] of [["trend5", "Change", "5 years"],
+                                   ["credit12", "Credit", "12 months"],
+                                   ["m", "NO₂", undefined]]) {
+    const dl = await newPage(browser, base + "#" + key);
+    const st = await layerState(dl.page);
+    ok(st.active === key && st.group === group && st.sub === sub,
+       "#" + key + " loads as " + group + (sub ? " / " + sub : " (no horizon row)") +
+       " — got " + st.group + "/" + st.sub);
+    ok(dl.errors.length === 0, "#" + key + " page clean" +
+       (dl.errors.length ? " — " + dl.errors.join("; ") : ""));
+    await dl.page.close();
+  }
+}
+
 /* --- Touch run (default headless: hover:none) -------------------------------- */
 async function touchRun(browser, base) {
   console.log("touch (hover: none):");
@@ -434,6 +537,7 @@ async function touchRun(browser, base) {
   const base = "http://127.0.0.1:" + srv.address().port + "/index.html";
 
   for (const [label, args, run] of [["desktop", [HOVER_FLAG], desktopRun],
+                                    ["layer control", [HOVER_FLAG], layerRun],
                                     ["top regions", [HOVER_FLAG], topRegionsRun],
                                     ["touch", [], touchRun]]) {
     /* defaultViewport:null — Puppeteer's viewport emulation (CDP
