@@ -143,7 +143,6 @@
     white-space: nowrap;
   }
   .layers button:last-child { border-right: none; }
-  .layers button[aria-pressed="true"] { background: var(--panel-2); color: var(--accent); }
   /* 3D toggle in the map control stack (matches maplibre's ctrl buttons) */
   .ctrl-3d button {
     font-family: var(--mono); font-size: 11.5px; font-weight: 600;
@@ -287,9 +286,16 @@
   }
   .chart-block .chart { height: var(--chart-h); }
 
-  /* sub-selector: same control, one step quieter than the primary row */
-  .layers.sub { margin-top: 5px; border-color: var(--line); }
+  /* sub-selector: same control, one step quieter (smaller type). The negative
+     margin pulls it against its group row — the card's gap separates blocks,
+     and the horizon row is not a separate block. */
+  .layers.sub { margin-top: -3px; border-color: var(--line); }
   .layers.sub button { padding: 4px 2px; font-size: 11px; color: var(--muted); }
+  /* Pressed state, both rows: an opaque accent-dark tint (≈ 20% accent over
+     the panel) + bright text. The card is translucent, so a bright map behind
+     it washes out any subtler background shift — the tint has to be opaque.
+     After the .sub rules, so it wins the color tie for the sub row too. */
+  .layers button[aria-pressed="true"] { background: #1d403d; color: var(--ink); }
   .layers.sub[hidden] { display: none; }
   .top-block .layers.scope { margin: 8px 0 4px; }
   .top-block .layers.scope button { padding: 4px 2px; font-size: 11.5px; }
