@@ -221,6 +221,8 @@ async function desktopRun(browser, base) {
   }), hex.id);
   ok(fine, "a fine-tier hex renders clear of the UI after zooming in");
   if (fine) {
+    // the chart follows the layer group; the two-line view is NO₂'s
+    await pickGroup(page, "NO₂");
     await page.mouse.move(fine.x, fine.y);
     const twoLines = await page.waitForFunction(id => {
       const ch = window.echarts && echarts.getInstanceByDom(document.getElementById("rp-chart"));
@@ -330,22 +332,21 @@ const topState = page => page.evaluate(() => {
     pinned: document.getElementById("region-panel").classList.contains("pinned"),
     pinnedRes: m ? h3.getResolution(m[0]) : null,
     cred: document.getElementById("rp-cred").textContent,
-    credDots: paid ? paid.data.length : 0,
+    credBars: paid ? paid.data.filter(v => v != null).length : 0,
     scope: [...document.querySelectorAll("#sub-buttons button")]
              .find(b => b.getAttribute("aria-pressed") === "true")?.textContent
   };
 });
 
-/* The top-ranked hex of a tier earned credit by construction, so its chart
-   must carry markers, and the count in the summary line must be consistent
-   with the number of dots drawn (a credited month with no m value on the line
-   has nowhere to sit, so dots ≤ paid months). */
+/* The top-ranked hex of a tier earned credit by construction, and this run
+   walks it on the Credit layer, so the chart is the bar view: every paid
+   month in the summary line gets a bar, no more, no fewer. */
 function okCreditMarkers(st, label) {
   const m = /^⬢ paid (\d+)\/(\d+) mo · peak /u.exec(st.cred);
   ok(!!m, label + " credit summary reads “" + st.cred + "”");
   if (!m) return;
-  ok(st.credDots > 0 && st.credDots <= +m[1],
-     label + " draws " + st.credDots + " marker(s) for " + m[1] + " paid month(s)");
+  ok(st.credBars === +m[1],
+     label + " draws " + st.credBars + " bar(s) for " + m[1] + " paid month(s)");
 }
 
 /* Wait out the debounced refresh: a zoom into a new tier fetches t4/t5 or res-6

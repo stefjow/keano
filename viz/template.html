@@ -417,6 +417,9 @@
       <p><b>Credit</b> shows credit paid, either in the latest month or summed
       over the last twelve months or the whole record; see below.
       <b>NO₂</b> shows the current level of m.</p>
+      <p>The hover chart follows the selected layer: NO₂ draws m itself,
+      Change the change of m against a year earlier, and Credit the monthly
+      payouts as bars. All three share the same month axis.</p>
 
       <h3>Credits</h3>
       <p>A cell earns credit when m drops below its own historical
@@ -444,11 +447,12 @@
       so full credit is only paid when the surrounding ~1,770 km² region
       is also below its own baseline. Isolated implausible records are
       zeroed.</p>
-      <p>On the hover chart, the dots on the trend line mark the months a hex
-      was actually paid, brighter for more credit, with the exact figure in
+      <p>On the Credit layer, the hover chart draws a bar for each month a
+      hex was actually paid, taller for more credit, with the exact figure in
       the tooltip. The line under the chart gives the count and the best
-      month. The dots are usually sparse, since a hex earns by stepping
-      down and not by sitting at an already-low level.</p>
+      month, and stays up on the other layers too. The bars are usually
+      sparse, since a hex earns by stepping down and not by sitting at an
+      already-low level.</p>
 
       <h3>The site</h3>
       <p>Static files only, no backend. Metrics are packed into binary
@@ -1477,11 +1481,6 @@ function showRegion(f) {
   rp.panel.hidden = false;   // before the chart draws: ECharts measures its container
   const r3i = r3Index.get(res === 3 ? P.id : parentR3(P.id));
   const cellNow = res > 3 && P.tm >= 0 ? dec.m(P.tm) : null;
-  const range = META.months[0] + " … " + META.months[NM - 1];
-  const regionNote = res === 3
-    ? "12-month mean NO₂ (m), " + range
-    : "12-month mean NO₂ of the surrounding res-3 region · □ this " +
-      (res === 6 ? "cell" : "res-" + res + " region") + " now, " + range;
   const wantOwn = WEB && WEB.series2 && res > 3;
   const ckey = res + ":" + f.id;
   const own = wantOwn ? cellSeriesCache.get(ckey) : null;
@@ -1496,13 +1495,10 @@ function showRegion(f) {
       .then(([a, cr]) => {
         if (seq !== chartSeq) return;
         if (a || cr) drawRegionChart(r3i, cellNow, a, cr, res);
-        if (!a) rp.note.textContent = regionNote;  // no per-hex series: don't promise teal
       });
   }
+  // the chart's caption (#rp-note) is written by the draw, which knows the view
   drawRegionChart(r3i, cellNow, own || null, cred || null, res);
-  rp.note.textContent = wantOwn
-    ? "12-month mean NO₂ — this hex (teal) vs its res-3 region (grey), " + range
-    : regionNote;
 }
 let chartSeq = 0;
 
@@ -1527,10 +1523,10 @@ function ecTooltip(formatter) {
     formatter
   };
 }
-function ecXAxis(months) {
+function ecXAxis(months, bar) {
   const evenJan = i => months[i].slice(5) === "01" && +months[i].slice(0, 4) % 2 === 0;
   return {
-    type: "category", data: months, boundaryGap: false,
+    type: "category", data: months, boundaryGap: !!bar,
     axisLine: { show: false }, axisTick: { show: false },
     axisLabel: { interval: (i) => evenJan(i), formatter: v => v.slice(0, 4),
                  color: "#6e8489", fontFamily: MONO, fontSize: 9.5, margin: 5 },
@@ -1539,14 +1535,6 @@ function ecXAxis(months) {
   };
 }
 
-/* Credit-payout markers sit ON the line whose credit they describe — the
-   hex's own line where we have it, the res-3 region line otherwise — so the
-   amount never needs a second y-scale. Magnitude rides the map's own credit
-   ramp, in four steps (its darkest step is chart-background dark, so the rug
-   starts one step up); the exact figures live in the tooltip and the summary
-   line under the chart, so nothing is readable by colour alone. */
-const CRED_STEPS = ["#155e56", "#27a08c", "#5fd6bd", "#c9fff1"];
-const credStep = t => CRED_STEPS[Math.min(3, Math.floor(t * 4))];
 function setCredNote(glyph, color, text) {
   rp.cred.textContent = "";
   if (!glyph) return;
@@ -1562,6 +1550,7 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
   if (!R3.series) {   // web mode: region series still on its way — park the whole
     pendingChart = [r3i, cellNow, ser, cred, res];   // draw, per-hex data included
     rp.cred.textContent = "";
+    rp.note.textContent = "";
     ch.setOption({ graphic: [{ type: "text", left: 8, top: "middle",
       style: { text: "history loading …", fill: "#6e8489", font: "9.5px " + MONO } }] }, true);
     return;
@@ -1571,85 +1560,26 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
   const decode = at => { const t = lev2t16(at); return t < 0 ? null : dec.m(t); };
   const vals = new Array(NM);        // res-3 region
   const own = ser ? new Array(NM) : null;   // the hovered hex itself
-  let lo = Infinity, hi = -Infinity, any = false;
+  let any = false;
   for (let j = 0; j < NM; j++) {
     vals[j] = decode(R3.series[r3i * NM + j]);
-    if (vals[j] != null) {
-      any = true;
-      if (vals[j] < lo) lo = vals[j];
-      if (vals[j] > hi) hi = vals[j];
-    }
+    if (vals[j] != null) any = true;
     if (own) {
       own[j] = decode(ser[j]);
-      if (own[j] != null) {
-        any = true;
-        if (own[j] < lo) lo = own[j];
-        if (own[j] > hi) hi = own[j];
-      }
+      if (own[j] != null) any = true;
     }
   }
-  if (!any) { ch.clear(); rp.cred.textContent = ""; return; }
-  if (!own && cellNow != null) {     // keep the hovered hex's marker in range
-    if (cellNow < lo) lo = cellNow;
-    if (cellNow > hi) hi = cellNow;
-  }
-  if (hi - lo < 1e-9) hi = lo + 1;
+  if (!any) { ch.clear(); rp.cred.textContent = ""; rp.note.textContent = ""; return; }
+  const lead = own || vals;          // the most specific series on screen
 
-  const lead = own || vals;          // dot on the most specific line
-  let lastJ = NM - 1;
-  while (lastJ >= 0 && lead[lastJ] == null) lastJ--;
-  const marks = [];
-  if (lastJ >= 0) {
-    marks.push({ coord: [lastJ, lead[lastJ]] });
-    if (!own && cellNow != null) {   // □ the hovered sub-hex's current value
-      marks.push({ coord: [lastJ, cellNow], symbol: "rect", symbolSize: 5,
-        itemStyle: { color: "rgba(0,0,0,0)", borderColor: "#d5e3e1", borderWidth: 1.2 } });
-    }
-  }
-  const series = [{
-    name: own ? "res-3 region" : "12-mo mean",
-    type: "line", data: vals, symbol: "none",
-    lineStyle: { width: own ? 1.1 : 1.4, color: own ? "rgba(110,132,137,0.85)" : "#4fd6c2" },
-    itemStyle: { color: own ? "#6e8489" : "#4fd6c2" },
-    emphasis: { disabled: true }
-  }];
-  if (own) {
-    series.push({
-      name: "this hex", type: "line", data: own, symbol: "none", z: 3,
-      lineStyle: { width: 1.4, color: "#4fd6c2" }, itemStyle: { color: "#4fd6c2" },
-      emphasis: { disabled: true }
-    });
-  }
-  series[series.length - 1].markPoint = {
-    silent: true, symbol: "circle", symbolSize: 4.8, animation: false,
-    itemStyle: { color: "#4fd6c2" }, label: { show: false }, data: marks
-  };
-
-  /* Events belong to the line they are drawn on: the hovered hex's own
-     payouts where its series is loaded, the region's otherwise. */
+  /* Credit history feeds the Credit view's bars and the summary line under
+     the chart. The line stays up on every view — on the m and YoY views it is
+     the only credit signal left. Events belong to the series they describe:
+     the hovered hex's own payouts where its series is loaded, the region's
+     otherwise. */
   const evRes = own ? res : 3;
   const evs = own ? cred : cr3Events(r3i);   // null: not known yet, ≠ none
   const events = evs || [];
-  const byMonth = new Map();
-  const dots = [];
-  for (const [j, lev] of events) {
-    if (j < 0 || j >= NM) continue;
-    const v = credHist(evRes, lev);
-    byMonth.set(j, v);
-    if (lead[j] != null)
-      dots.push({ value: [j, lead[j]], amount: v,
-                  itemStyle: { color: credStep(lev / 255),
-                               borderColor: "#111a20", borderWidth: 1.2 } });
-  }
-  if (dots.length) {
-    series.push({
-      name: "credit paid", type: "scatter", data: dots, z: 4,
-      symbolSize: 5.4, animation: false, emphasis: { disabled: true }
-    });
-  }
-  /* The always-visible half of the encoding: the dots say *when* at a glance,
-     this line says how often and how much in figures, so neither the count nor
-     the peak is readable only by colour or only on hover. */
   const credFmt = v => fmt["credit" + evRes](v);
   const whose = own || res === 3 ? "" : " (region)";
   if (!evs) {
@@ -1657,7 +1587,7 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
   } else if (events.length) {
     let best = events[0];
     for (const e of events) if (e[1] > best[1]) best = e;
-    setCredNote("⬢", CRED_STEPS[2],
+    setCredNote("⬢", "#5fd6bd",
       "paid " + events.length + "/" + NM + " mo · peak " +
       credFmt(credHist(evRes, best[1])) + " " +
       monthName(META.months[best[0]]) + whose);
@@ -1665,30 +1595,160 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
     setCredNote("⬡", "#6e8489", "never paid in " + NM + " mo" + whose);
   }
 
-  ch.setOption({
-    animation: false,
-    grid: { left: 1, right: 40, top: 5, bottom: 15 },
-    tooltip: ecTooltip(ps => {
-      const rows = ps.filter(p => p.value != null && p.seriesName !== "credit paid");
+  /* One chart, three views, switched by the primary layer group, so the panel
+     talks about whatever the map is painting: NO₂ draws m itself, Change the
+     change of m vs a year earlier, Credit the payouts as bars. All three keep
+     the full month axis, so switching layers never moves the x scale. */
+  const view = groupOf(activeLayer).key;
+  const range = META.months[0] + " … " + META.months[NM - 1];
+  const suffix = own ? " — this hex" : res === 3 ? "" : " — res-3 region";
+  let lo, hi, series, yLabels, yFmt, tipFmt, note;
+
+  if (view === "credit") {
+    const bars = new Array(NM).fill(null);
+    lo = 0; hi = 0;
+    for (const [j, lev] of events) {
+      if (j < 0 || j >= NM) continue;
+      const v = credHist(evRes, lev);
+      bars[j] = v;
+      if (v > hi) hi = v;
+    }
+    /* a never-paid history still draws the (empty) frame, but a 0 … max label
+       pair on it would put figures on nothing */
+    yLabels = hi > 0 ? [0, hi] : [];
+    if (hi === 0) hi = 1;
+    series = [{
+      name: "credit paid", type: "bar", data: bars, z: 3, barMinHeight: 1,
+      itemStyle: { color: "#4fd6c2" }, emphasis: { disabled: true }
+    }];
+    yFmt = credFmt;
+    tipFmt = ps => {
+      const p = ps.find(q => q.seriesIndex === 0);
+      if (!p) return "";
+      const v = bars[p.dataIndex];
+      return p.axisValue + "<br>" + (v != null
+        ? "<span style=\"color:#5fd6bd\">⬢</span> credit&nbsp; " + credFmt(v)
+        : "⬡ no credit");
+    };
+    note = "credit paid by month" + suffix + ", " + range;
+
+  } else if (view === "change") {
+    /* YoY of the lead series: the one horizon that exists as a monthly line
+       (overall and 5-year are single figures), so all three Change horizons
+       share this view. The first year is structurally empty. */
+    const yoy = new Array(NM).fill(null);
+    lo = 0; hi = 0;
+    for (let j = 12; j < NM; j++) {
+      if (lead[j] == null || !(lead[j - 12] > 0)) continue;
+      const v = (lead[j] / lead[j - 12] - 1) * 100;
+      yoy[j] = v;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (hi - lo < 1e-9) { lo = -1; hi = 1; }
+    let lastJ = NM - 1;
+    while (lastJ >= 0 && yoy[lastJ] == null) lastJ--;
+    yLabels = [lo, hi];
+    series = [{
+      type: "line", data: yoy, symbol: "none", z: 3, emphasis: { disabled: true },
+      lineStyle: { width: 1.4, color: "#d5e3e1" }, itemStyle: { color: "#d5e3e1" },
+      markPoint: { silent: true, symbol: "circle", symbolSize: 4.8, animation: false,
+                   itemStyle: { color: "#d5e3e1" }, label: { show: false },
+                   data: lastJ >= 0 ? [{ coord: [lastJ, yoy[lastJ]] }] : [] },
+      markLine: lo < 0 ? {
+        silent: true, symbol: "none", animation: false, label: { show: false },
+        lineStyle: { color: "#31424c", type: "solid", width: 1 },
+        data: [{ yAxis: 0 }]
+      } : { data: [] }
+    }];
+    /* fills split at zero, same language as the global YoY chart */
+    for (const [clamp, color] of [[Math.max, "#e8873c"], [Math.min, "#4fd6c2"]]) {
+      series.push({
+        type: "line", data: yoy.map(v => v == null ? null : clamp(v, 0)),
+        symbol: "none", silent: true, z: 1, emphasis: { disabled: true },
+        lineStyle: { opacity: 0 }, areaStyle: { color, opacity: 0.25, origin: 0 }
+      });
+    }
+    yFmt = v => (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+    tipFmt = ps => {
+      const p = ps.find(q => q.seriesIndex === 0 && q.value != null);
+      return p ? p.axisValue + "&nbsp; " + yFmt(p.value) : "";
+    };
+    note = "change of m vs 12 months earlier" + suffix + ", " + range;
+
+  } else {   // NO₂: m itself, region + the hex's own line where it is loaded
+    lo = Infinity; hi = -Infinity;
+    for (let j = 0; j < NM; j++) {
+      if (vals[j] != null) { if (vals[j] < lo) lo = vals[j]; if (vals[j] > hi) hi = vals[j]; }
+      if (own && own[j] != null) { if (own[j] < lo) lo = own[j]; if (own[j] > hi) hi = own[j]; }
+    }
+    if (!own && cellNow != null) {   // keep the hovered hex's marker in range
+      if (cellNow < lo) lo = cellNow;
+      if (cellNow > hi) hi = cellNow;
+    }
+    if (hi - lo < 1e-9) hi = lo + 1;
+
+    let lastJ = NM - 1;              // dot on the most specific line
+    while (lastJ >= 0 && lead[lastJ] == null) lastJ--;
+    const marks = [];
+    if (lastJ >= 0) {
+      marks.push({ coord: [lastJ, lead[lastJ]] });
+      if (!own && cellNow != null) { // □ the hovered sub-hex's current value
+        marks.push({ coord: [lastJ, cellNow], symbol: "rect", symbolSize: 5,
+          itemStyle: { color: "rgba(0,0,0,0)", borderColor: "#d5e3e1", borderWidth: 1.2 } });
+      }
+    }
+    series = [{
+      name: own ? "res-3 region" : "12-mo mean",
+      type: "line", data: vals, symbol: "none",
+      lineStyle: { width: own ? 1.1 : 1.4, color: own ? "rgba(110,132,137,0.85)" : "#4fd6c2" },
+      itemStyle: { color: own ? "#6e8489" : "#4fd6c2" },
+      emphasis: { disabled: true }
+    }];
+    if (own) {
+      series.push({
+        name: "this hex", type: "line", data: own, symbol: "none", z: 3,
+        lineStyle: { width: 1.4, color: "#4fd6c2" }, itemStyle: { color: "#4fd6c2" },
+        emphasis: { disabled: true }
+      });
+    }
+    series[series.length - 1].markPoint = {
+      silent: true, symbol: "circle", symbolSize: 4.8, animation: false,
+      itemStyle: { color: "#4fd6c2" }, label: { show: false }, data: marks
+    };
+    yLabels = [lo, hi];
+    yFmt = v => fmt.m(v);
+    tipFmt = ps => {
+      const rows = ps.filter(p => p.value != null);
       if (!rows.length) return "";
       let s = rows[0].axisValue;
       for (const p of rows) {
         s += "<br>" + p.marker + (rows.length > 1 ? p.seriesName + "&nbsp; " : "") + fmt.m(p.value);
       }
-      const paid = byMonth.get(rows[0].dataIndex);
-      if (paid !== undefined)
-        s += "<br><span style=\"color:#5fd6bd\">⬢</span> credit&nbsp; " + credFmt(paid);
       return s;
-    }),
-    xAxis: ecXAxis(META.months),
+    };
+    note = own
+      ? "12-month mean NO₂ — this hex (teal) vs its res-3 region (grey), " + range
+      : res === 3
+      ? "12-month mean NO₂ (m), " + range
+      : "12-month mean NO₂ of the surrounding res-3 region · □ this " +
+        (res === 6 ? "cell" : "res-" + res + " region") + " now, " + range;
+  }
+
+  ch.setOption({
+    animation: false,
+    grid: { left: 1, right: 40, top: 5, bottom: 15 },
+    tooltip: ecTooltip(tipFmt),
+    xAxis: ecXAxis(META.months, view === "credit"),
     yAxis: {
       type: "value", min: lo, max: hi, position: "right",
       axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false },
-      axisLabel: { customValues: [lo, hi], formatter: v => fmt.m(v),
+      axisLabel: { customValues: yLabels, formatter: yFmt,
                    color: "#6e8489", fontFamily: MONO, fontSize: 9.5, margin: 4 }
     },
     series
   }, true);
+  rp.note.textContent = note;
 }
 
 /* --- Layer switching + legend --------------------------------------------------- */
@@ -1768,18 +1828,23 @@ function drawLegend() {
 function drawSeries(id, vals, months, opts) {
   const ch = ecChart(document.getElementById(id));
   if (!ch) return;
-  let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  const nn = vals.filter(v => v != null);
+  let lo = Math.min(0, ...nn), hi = Math.max(0, ...nn);
   if (hi === lo) hi = lo + 1;
-  const lastJ = vals.length - 1;
+  let lastJ = vals.length - 1;
+  while (lastJ >= 0 && vals[lastJ] == null) lastJ--;
 
-  const series = [{
+  const series = opts.bar ? [{
+    type: "bar", data: vals, z: 3, barMinHeight: 1,
+    emphasis: { disabled: true }, itemStyle: { color: opts.color }
+  }] : [{
     type: "line", data: vals, symbol: "none", z: 3,
     emphasis: { disabled: true },
     lineStyle: { width: 1.4, color: opts.color },
     itemStyle: { color: opts.color },
     markPoint: { silent: true, symbol: "circle", symbolSize: 4.8, animation: false,
                  itemStyle: { color: opts.color }, label: { show: false },
-                 data: [{ coord: [lastJ, vals[lastJ]] }] },
+                 data: lastJ >= 0 ? [{ coord: [lastJ, vals[lastJ]] }] : [] },
     markLine: lo < 0 ? {
       silent: true, symbol: "none", animation: false, label: { show: false },
       lineStyle: { color: "#31424c", type: "solid", width: 1 },
@@ -1790,12 +1855,12 @@ function drawSeries(id, vals, months, opts) {
     /* fills split at zero, carried by silent clamped copies of the series */
     for (const [clamp, color] of [[Math.max, "#e8873c"], [Math.min, "#4fd6c2"]]) {
       series.push({
-        type: "line", data: vals.map(v => clamp(v, 0)), symbol: "none",
+        type: "line", data: vals.map(v => v == null ? null : clamp(v, 0)), symbol: "none",
         silent: true, z: 1, emphasis: { disabled: true },
         lineStyle: { opacity: 0 }, areaStyle: { color, opacity: 0.25, origin: 0 }
       });
     }
-  } else {
+  } else if (!opts.bar) {
     series[0].areaStyle = { opacity: 0.18, color: opts.color, origin: "start" };
   }
 
@@ -1806,20 +1871,23 @@ function drawSeries(id, vals, months, opts) {
       const p = ps.find(q => q.seriesIndex === 0 && q.value != null);
       return p ? p.axisValue + "&nbsp; " + opts.fmt(p.value) : "";
     }),
-    xAxis: ecXAxis(months),
+    xAxis: ecXAxis(months, opts.bar),
     yAxis: { type: "value", min: lo, max: hi, show: false },
     series
   }, true);
 }
 function drawCharts() {
   const SG = META.series_global;
+  const months = SG.map(r => r.month);
+  /* YoY needs a year of history, so the leading months are structurally
+     empty. Null them instead of trimming: both charts keep the same axis. */
   const first = SG.findIndex(r => r.perf !== 0);
-  const sp = SG.slice(first < 0 ? 0 : first);
-  drawSeries("chart-perf", sp.map(r => r.perf * 100), sp.map(r => r.month),
+  drawSeries("chart-perf",
+             SG.map((r, i) => first < 0 || i < first ? null : r.perf * 100), months,
              { diverging: true, color: "#d5e3e1",
                fmt: v => (v > 0 ? "+" : "") + v.toFixed(1) + "%" });
-  drawSeries("chart-credit", SG.map(r => r.credit), SG.map(r => r.month),
-             { diverging: false, color: "#4fd6c2",
+  drawSeries("chart-credit", SG.map(r => r.credit), months,
+             { bar: true, color: "#4fd6c2",
                fmt: v => Math.round(v).toLocaleString("en-US") });
   const last = SG[SG.length - 1];
   const p = document.getElementById("perf-now");

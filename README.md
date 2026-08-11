@@ -172,17 +172,17 @@ a per-res-3-parent occupancy bitmap plus delta-encoded quantized metric
 planes, and the browser reconstructs H3 ids and hexagon outlines for the
 current viewport only.
 
-The trend panel also marks **which months the hovered hex was actually paid
-credit in**, and how much, as dots on the line itself. Colour steps up the
-map's credit ramp, with the count and the peak in figures under the chart and
-the exact month value on hover. 98%+ of hex-months earn nothing, so this
-ships as events rather than as a per-month plane: one `(month, level)` byte
-pair per payout. res-3 events are a flat sorted key list in `series.bin` (both
+The trend panel's chart follows the selected layer: NO₂ draws `m` itself,
+Change its change against a year earlier, and Credit **which months the
+hovered hex was actually paid in**, and how much, as bars — with the count
+and the peak in figures under the chart and the exact month value on hover.
+98%+ of hex-months earn nothing, so the payout history ships as events rather
+than as a per-month plane: one `(month, level)` byte pair per payout. res-3 events are a flat sorted key list in `series.bin` (both
 builds); res-4/5/6 events live in `c<r>.bin` and are addressed by a per-cell
 count plane carried inside the tier's own gzipped planes; the client
 prefix-sums it, so no offset table is stored or shipped. That keeps the whole
 feature under 1% of the bundle. The finer tiers are web-only, like the
-per-hex `m` series they annotate; in the single-file build a hex below res 3
+per-hex `m` series they accompany; in the single-file build a hex below res 3
 shows its region's payouts, marked `(region)`.
 
 One template, two builds:
