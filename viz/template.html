@@ -133,6 +133,8 @@
   }
   .about-body h3:first-child { margin-top: 0; }
   .about-body p { font-size: 13px; line-height: 1.55; margin-bottom: 8px; }
+  .about-body ul { font-size: 13px; line-height: 1.55; margin-bottom: 8px; padding-left: 20px; }
+  .about-body li { margin-bottom: 2px; }
   .about-body b { font-weight: 600; }
   .about-attrib { color: var(--muted); font-size: 11.5px; margin-top: 12px; }
 
@@ -429,87 +431,97 @@
     </div>
     <div class="about-body">
       <h3>What it measures</h3>
-      <p>keano tracks NO₂ pollution in every ~36 km² hexagon on Earth and
-      scores how well each one is cleaning up, month by month since
-      May 2018. Most NO₂ comes from combustion, which makes it a reasonable
-      proxy for local air pollution.</p>
+      <p>keano measures the NO₂ pollution in each hexagon of approximately
+      36 km² on Earth. Each month since May 2018, keano gives each hexagon
+      a score for its decrease in pollution. Most NO₂ comes from
+      combustion. Thus NO₂ is a good indication of local air pollution.</p>
 
       <h3>The data</h3>
-      <p>Monthly global NO₂ from Sentinel-5P/TROPOMI (Terrascope L3,
-      0.02° grid, quality-filtered), averaged into H3 resolution-6
-      hexagons with coverage weighting. The values are tropospheric column
-      densities in µmol/m², counting all the NO₂ in the air above a hex, so
-      they are not surface concentrations.</p>
+      <p>The data source is monthly global NO₂ from the Sentinel-5P/TROPOMI
+      satellite (Terrascope L3, 0.02° grid, quality-filtered). keano
+      calculates the average of this data in each H3 resolution-6 hexagon,
+      with weights for coverage. The values are tropospheric column
+      densities in µmol/m². A value includes all the NO₂ in the air above a
+      hexagon. The values are not surface concentrations.</p>
 
       <h3>The base series: m</h3>
-      <p>Everything is computed from <b>m</b>, the average NO₂ over the
-      trailing 12 months. A full-year window removes the seasonal cycle and
-      smooths out retrieval noise. m only ever looks at past months, so
-      adding a new month leaves the closed ones untouched.</p>
-      <p>The scoring rules on top of m do change. When one changes it is
-      recomputed across the whole record, so every month is scored the same
-      way. The credit rule last changed in August 2026; figures published
-      before then were larger for the same reductions.</p>
+      <p>keano calculates all its scores from <b>m</b>. m is the average
+      NO₂ for the last 12 months. A 12-month window removes the seasonal
+      cycle and decreases the measurement noise. m uses only the months
+      before the current month. Thus a new month does not change the values
+      for the closed months.</p>
+      <p>The score rules that use m can change. When a rule changes, keano
+      calculates the full record again with the new rule. Then all the
+      months have scores from the same rule. The credit rule changed in
+      August 2026. The figures from before that date were larger for the
+      same decreases.</p>
 
       <h3>The layers</h3>
-      <p><b>Change</b> shows how fast m is moving, over three horizons:
-      <i>overall</i> is the annualized rate since the cell's first full year,
-      <i>5 years</i> the same rate over a fixed five-year window, and
-      <i>last year</i> compares m to its value twelve months earlier. The
-      three often disagree. The overall figure averages in 2019–2021, which
-      were flat, so a cell that has improved mostly since then looks slower
-      there than in the five-year view.</p>
-      <p>The five-year and last-year views need m from that far back, and in the
-      far north there often isn't any: polar night leaves too few observed
-      months for a 12-month mean, so those hexes stay unfilled. The overall view
-      has no gaps, since it measures from wherever each cell's record actually
-      starts.</p>
-      <p><b>Credit</b> shows credit paid, either in the latest month or summed
-      over the last twelve months or the whole record; see below.
-      <b>NO₂</b> shows the current level of m.</p>
-      <p>The hover chart follows the selected layer: NO₂ draws m itself,
-      Change the change of m against a year earlier, and Credit the monthly
-      payouts as bars. All three share the same month axis.</p>
+      <p>The <b>Change</b> layer shows the speed at which m changes. There
+      are three horizons:</p>
+      <ul>
+        <li><i>overall</i> is the annual rate since the first full year of
+        the cell,</li>
+        <li><i>5 years</i> is the annual rate for the last five years,</li>
+        <li><i>last year</i> compares m with its value 12 months
+        before.</li>
+      </ul>
+      <p>The three horizons frequently do not agree. The overall rate
+      includes 2019–2021, when the values were almost constant. Thus a cell
+      with only recent decreases has a lower overall rate than its 5-year
+      rate.</p>
+      <p>The 5-year and last-year horizons need m values from that time. In
+      the far north, the polar night causes months without data. Then a
+      12-month average is not possible, and those hexagons stay empty. The
+      overall horizon has no empty hexagons, because it starts where the
+      record of each cell starts.</p>
+      <p>The <b>Credit</b> layer shows the credit given in the last month,
+      in the last 12 months, or in the full record; see below. The
+      <b>NO₂</b> layer shows the current value of m.</p>
+      <p>The chart in the hover panel agrees with the layer that you
+      select. For NO₂, the chart shows m. For Change, the chart shows the
+      change of m against the year before. For Credit, the chart shows the
+      monthly credits as bars. The three views have the same month
+      axis.</p>
 
       <h3>Credits</h3>
-      <p>A cell earns credit when m drops below its own historical
-      minimum. The baseline B is the lowest m the cell has reached in the
-      past five years, up to and including last month, and m has to
-      undercut it by more than a 1.2% noise margin. Credit is the
-      relative undercut (B − m)/B, so a clean cell and a dirty cell earn
-      the same for the same percentage improvement. Records expire after
-      five years, so every cell periodically has something to earn
-      again.</p>
-      <p>Because the baseline includes the most recent month, a cell has
-      to keep beating its own best to keep earning, and each step down is
-      paid once. Over a cell's whole record the credit adds up to roughly
-      log(first m ÷ latest m), the same total for the same total
-      reduction however fast it arrived.</p>
-      <p>A step smaller than the margin is banked rather than lost: the
-      undercut is measured from the level a cell was last actually paid
-      at, so several small drops accumulate until together they clear the
-      margin. A month zeroed by the neighbourhood check below is deferred
-      the same way.</p>
-      <p>Two further rules. Only cells with m ≥ 30 µmol/m² are
-      scored, since percent changes mean little at background noise
-      level. And because NO₂ travels tens of kilometres, a record low can
-      just be the neighbour's plume blowing somewhere else this year,
-      so full credit is only paid when the surrounding ~1,770 km² region
-      is also below its own baseline. Isolated implausible records are
-      zeroed.</p>
-      <p>On the Credit layer, the hover chart draws a bar for each month a
-      hex was actually paid, taller for more credit, with the exact figure in
-      the tooltip. The line under the chart gives the count and the best
-      month, and stays up on the other layers too. The bars are usually
-      sparse, since a hex earns by stepping down and not by sitting at an
-      already-low level.</p>
+      <p>keano gives credit to a cell when m goes below the record minimum
+      of that cell. The baseline B is the lowest m of the cell in the last
+      five years. This period includes the last month. m must go below B by
+      more than a noise margin of 1.2%. The credit is the relative decrease
+      (B − m)/B. Thus a clean cell and a dirty cell receive the same credit
+      for the same percentage decrease. keano removes records after five
+      years. Thus each cell can receive credit again after some time.</p>
+      <p>The baseline includes the last month. Thus a cell must go below
+      its own best value again to receive more credit. Each step down
+      receives credit one time. For the full record of a cell, the total
+      credit is approximately log(first m ÷ latest m). The speed of the
+      decrease does not change this total.</p>
+      <p>A step smaller than the margin is not lost. keano measures the
+      decrease from the level at which the cell last received credit. Thus
+      small decreases collect until their sum is more than the margin. A
+      month that the neighbourhood check (below) sets to zero collects the
+      same way.</p>
+      <p>There are two more rules. Only cells with m ≥ 30 µmol/m²
+      receive scores, because percent changes have no meaning at the
+      background noise level. NO₂ moves tens of kilometres. A record
+      minimum can occur because the plume of an adjacent cell went to a
+      different area for one year. Thus keano gives the full credit only
+      when the region of approximately 1,770 km² around the cell is also
+      below its own baseline. keano sets these isolated, improbable records
+      to zero.</p>
+      <p>On the Credit layer, the hover chart shows a bar for each month in
+      which the hexagon received credit. A taller bar shows more credit.
+      The tooltip shows the exact figure. The line below the chart gives
+      the count of months with credit and the best month. This line stays
+      visible on the other layers. The bars are usually not frequent,
+      because a hexagon receives credit for a decrease, not for a low
+      constant level.</p>
 
       <h3>The site</h3>
-      <p>Static files only, no backend. Metrics are packed into binary
-      planes, and the per-hex trend chart is fetched with a ~200-byte
-      HTTP range request on hover. Built with MapLibre GL and H3.
-      Clicking a hex's ⬡ code copies a link that jumps straight
-      to it.</p>
+      <p>The site is a set of static files, with no backend. It uses
+      MapLibre GL and H3. Click the ⬡ code of a hexagon to copy a link
+      that goes directly to that hexagon.</p>
 
       <p class="about-attrib">Contains modified Copernicus Sentinel-5P
       data, processed by VITO/Terrascope. Basemap
