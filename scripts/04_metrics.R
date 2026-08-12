@@ -60,6 +60,15 @@
 #              accumulate instead of being discarded, which lifts the
 #              telescoping ratio from ~0.77 to ~0.87 and pays ~12% more, to the
 #              same set of cells. See carry_credit() below.
+#   gap_share / m_v4 / baseline_v4 / parent_under_v4 / credit_v4 / is_record_v4
+#              (v4, PROTOTYPE) v3 on a seasonally-gated m. gap_share weighs a
+#              window's unobserved months by the cell's causal climatology;
+#              m_v4 blanks windows missing more than GAP_SHARE_M of the
+#              seasonal cycle (a partial window is only deseasonalized when
+#              what it is missing is climatologically minor), and credit
+#              additionally requires gap_share <= GAP_SHARE_CREDIT — a record
+#              set while peak months are unobserved defers via carry_credit
+#              instead of paying on a biased mean. See config.
 #
 # Output: data/metrics/shard=<h3res0>/part-0.parquet
 # ============================================================================
@@ -157,6 +166,33 @@ do_shard = function(s) {
   ), by = cell_id]
   dt[n_obs < MIN_MONTHS_IN_WINDOW, m := NA_real_]
   dt[, has_m := !is.na(m)]
+
+  # --- Seasonal-coverage gate (v4) --------------------------------------------
+  # The count floor above treats all months as equal; the seasonal cycle does
+  # not. Weigh each unobserved window month by the cell's causal climatology of
+  # that calendar month (mean of its past observations; strictly backward, so
+  # the shifted cumulative mean per (cell, calendar-month) slot). A month never
+  # observed before has no climatology and no weight: structurally dark polar
+  # slots miss every year alike and stay comparable. gap_share is then the
+  # climatological share of the window the cell did not see.
+  dt[, slot := midx %% 12L]
+  dt[, `:=`(csum = cumsum(fifelse(obs, no2, 0)),
+            ccnt = cumsum(as.integer(obs))), by = .(cell_id, slot)]
+  dt[, clim := {
+    pc = shift(ccnt, fill = 0L)
+    fifelse(pc > 0L, shift(csum, fill = 0) / pc, NA_real_)
+  }, by = .(cell_id, slot)]
+  dt[, `:=`(
+    clim_miss  = frollsum(fifelse(!obs & !is.na(clim), clim, 0), WINDOW_MONTHS),
+    clim_known = frollsum(fifelse(!is.na(clim), clim, 0), WINDOW_MONTHS)
+  ), by = cell_id]
+  dt[, gap_share := fifelse(is.finite(clim_known) & clim_known > 0,
+                            clim_miss / clim_known, 0)]
+  dt[, c("slot", "csum", "ccnt", "clim", "clim_miss", "clim_known") := NULL]
+  # A mean missing this much of the cycle is not a level; below that it renders
+  # but cannot set a record (cov_ok gates the v4 credit scan further down).
+  dt[, m_v4 := fifelse(!is.na(gap_share) & gap_share > GAP_SHARE_M, NA_real_, m)]
+  dt[, cov_ok := !is.na(gap_share) & gap_share <= GAP_SHARE_CREDIT]
 
   dt[, perf_short := m / shift(m, WINDOW_MONTHS) - 1, by = cell_id]
 
@@ -256,23 +292,89 @@ do_shard = function(s) {
   }
   dt[is.na(m) | is.na(baseline_v2), `:=`(credit_v3 = NA_real_, is_record_v3 = NA)]
 
+  # credit_v4 (prototype): the v3 scan on the seasonally-gated m. Same margin,
+  # same carry, same expiry; the baseline and the parent context are rebuilt
+  # from m_v4 so a gap-biased low can neither earn nor become the reference,
+  # and cov_ok defers payment on months whose window misses more than
+  # GAP_SHARE_CREDIT of the cycle.
+  dt[, baseline_v4 := roll_prev_min(m_v4, CREDIT_V2_EXCLUDE_MONTHS), by = cell_id]
+  # The parent mean is only the region when (nearly) the whole roster is in it:
+  # the gate blanks children unevenly around coverage gaps, and a mean over the
+  # surviving subset would sit in the parent baseline as a phantom low (see
+  # PARENT_MIN_COVER in config). NA months fall back to w = 1 below, the same
+  # convention as an undefined parent.
+  parp4 = dt[!is.na(m_v4), .(m_p = mean(m_v4), n_p = .N), by = .(p4i, midx)]
+  parp4 = parp4[CJ(p4i = unique(ce$p4i), midx = midx_full),
+                on = c("p4i", "midx")]
+  setkey(parp4, p4i, midx)
+  parp4[, n_ref := max(fifelse(is.na(n_p), 0L, n_p)), by = p4i]
+  parp4[!is.na(n_p) & n_p < PARENT_MIN_COVER * n_ref, m_p := NA_real_]
+  parp4[, b_p := roll_prev_min(m_p, CREDIT_V2_EXCLUDE_MONTHS), by = p4i]
+  parp4[, parent_under_v4 := (b_p - m_p) / b_p]
+  dt[parp4, parent_under_v4 := i.parent_under_v4, on = c("p4i", "midx")]
+  dt[, eligible_v4 := !is.na(m_v4) & m_v4 >= NO2_FLOOR]
+  dt[, w_parent_v4 := fifelse(
+    is.na(parent_under_v4), 1,
+    pmin(pmax((parent_under_v4 + CREDIT_V2_PARENT_RAMP) /
+              (2 * CREDIT_V2_PARENT_RAMP), 0), 1)
+  )]
+  # The display metrics recomputed from the gated series, so the Change layers
+  # cannot show an "improvement" that is only a window losing its peak months.
+  # Same constructions as above, on m_v4 (kept as copies, not a refactor, so
+  # the v1-v3 code path stays byte-for-byte what it was).
+  dt[, has_m4 := !is.na(m_v4)]
+  dt[, perf_short_v4 := m_v4 / shift(m_v4, WINDOW_MONTHS) - 1, by = cell_id]
+  dt[, `:=`(
+    m_first_v4    = m_v4[which(has_m4)[1]],
+    midx_first_v4 = midx[which(has_m4)[1]]
+  ), by = cell_id]
+  dt[, perf_long_v4 := fifelse(
+    has_m4 & midx > midx_first_v4,
+    (m_v4 / m_first_v4)^(12 / (midx - midx_first_v4)) - 1,
+    NA_real_
+  )]
+  dt[, `:=`(m_ref4 = NA_real_, lag_ref4 = NA_integer_)]
+  for (d in c(0L, as.vector(rbind(seq_len(TREND_WINDOW_SLACK),
+                                  -seq_len(TREND_WINDOW_SLACK))))) {
+    L = TREND_WINDOW_MONTHS + d
+    if (L < 1L) next
+    dt[, cand := shift(m_v4, L), by = cell_id]
+    dt[is.na(m_ref4) & is.finite(cand), `:=`(m_ref4 = cand, lag_ref4 = L)]
+  }
+  dt[, perf_5y_v4 := fifelse(has_m4 & is.finite(m_ref4) & m_ref4 > 0,
+                             (m_v4 / m_ref4)^(12 / lag_ref4) - 1, NA_real_)]
+  dt[, c("m_ref4", "lag_ref4", "cand") := NULL]
+
+  dt[, `:=`(credit_v4 = 0, is_record_v4 = FALSE)]
+  ever4 = dt[eligible_v4 == TRUE, unique(cell_id)]
+  if (length(ever4)) {
+    dt[cell_id %in% ever4,
+       c("credit_v4", "is_record_v4") := carry_credit(
+         midx, m_v4, baseline_v4, eligible_v4 & cov_ok, w_parent_v4,
+         CREDIT_V2_MARGIN, BASELINE_WINDOW_MONTHS), by = cell_id]
+  }
+  dt[is.na(m_v4) | is.na(baseline_v4), `:=`(credit_v4 = NA_real_, is_record_v4 = NA)]
+
   # Drop the empty lead-in before a cell's first observation
   out = dt[obs | has_m, .(
     cell_id, month = index_to_label(midx), no2, n_pix,
     m, perf_short, perf_long, perf_5y, baseline, parent_under,
     credit, eligible, is_record,
     baseline_v2, parent_under_v2, credit_v2,
-    credit_v3, is_record_v3
+    credit_v3, is_record_v3,
+    gap_share, m_v4, baseline_v4, parent_under_v4, credit_v4, is_record_v4,
+    perf_short_v4, perf_long_v4, perf_5y_v4, eligible_v4
   )]
 
   shard_dir = ensure_dir(file.path(DATA_METRICS, paste0("shard=", s)))
   write_parquet(out, file.path(shard_dir, "part-0.parquet"))
 
-  message(sprintf("[%s] %s cells, %s records, credit %.0f / v3 %.0f, %.1fs", s,
+  message(sprintf("[%s] %s cells, %s records, credit %.0f / v3 %.0f / v4 %.0f, %.1fs", s,
                   format(uniqueN(out$cell_id), big.mark = ","),
                   format(sum(out$is_record), big.mark = ","),
                   sum(out$credit, na.rm = TRUE),
                   sum(out$credit_v3, na.rm = TRUE),
+                  sum(out$credit_v4, na.rm = TRUE),
                   as.numeric(Sys.time() - t0, units = "secs")))
   s
 }
@@ -285,7 +387,8 @@ clusterExport(cl, c("do_shard", "parent_r4", "HEXC", "midx_full",
                     "BASELINE_WINDOW_MONTHS", "BASELINE_EXCLUDE_MONTHS",
                     "CREDIT_MARGIN", "NO2_FLOOR",
                     "CREDIT_V2_EXCLUDE_MONTHS", "CREDIT_V2_MARGIN",
-                    "CREDIT_V2_PARENT_RAMP", "carry_credit",
+                    "CREDIT_V2_PARENT_RAMP", "GAP_SHARE_M", "GAP_SHARE_CREDIT",
+                    "PARENT_MIN_COVER", "carry_credit",
                     "month_index", "index_to_label", "roll_min_adaptive",
                     "ensure_dir"))
 invisible(clusterEvalQ(cl, suppressMessages({

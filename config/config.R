@@ -111,6 +111,39 @@ CREDIT_V2_EXCLUDE_MONTHS = 1L    # baseline window ends at t-1, not t-12
 CREDIT_V2_MARGIN         = 0.012 # retuned noise gate (see above)
 CREDIT_V2_PARENT_RAMP    = 0.02  # plume-guard ramp half-width, kept at v1's
 
+# --- Seasonal-coverage gate (credit_v4, prototype) -----------------------------
+# A 12-month mean is only deseasonalized when the window actually covers the
+# seasonal cycle. A window can clear MIN_MONTHS_IN_WINDOW by count and still be
+# missing the *peak* months — high-latitude winters drop out of the retrieval
+# (snow, low sun) in some years and not others — which biases m low and mints
+# artificial record lows the moment the series resumes (measured: the all-time
+# res-6 leader near Edmonton took a third of its total, a 25% "undercut", from
+# a window missing Dec+Jan ≈ half its annual NO₂).
+#
+# The gate weighs a window's unobserved months by the cell's own causal
+# climatology: the mean of its PAST observations of that calendar month. A
+# month never observed before carries no weight, so structurally dark polar
+# cells — whose windows miss the same months every year and stay comparable —
+# are exempt. gap_share is the climatological share of the window the cell did
+# not see:
+#   gap_share > GAP_SHARE_M      -> the mean is not credible as a level: m = NA
+#                                   (the artifact windows here score ~0.5)
+#   gap_share > GAP_SHARE_CREDIT -> m renders, but no credit is paid that
+#                                   month; the undercut stays banked and pays
+#                                   at the next well-covered month (the same
+#                                   deferral the plume guard uses)
+GAP_SHARE_M      = 0.25
+GAP_SHARE_CREDIT = 0.05
+# The v4 parent (plume-guard) series averages the gated m over each res-4
+# region's children — and when the gate blanks children unevenly, a month's
+# mean over the surviving subset is not the same region (measured: 22 of 49
+# children, mean 28.3 vs 36.5 with the full roster a month later; that subset
+# low would sit in the parent baseline and block the guard for five years).
+# So the parent mean only counts when at least this share of the region's
+# largest-ever contributing roster is present; months below it are NA and the
+# guard falls back to full weight, the same convention as an undefined parent.
+PARENT_MIN_COVER = 0.8
+
 # --- Sanity gate (script 05) --------------------------------------------------
 # A new month must clear these before anything is built or published. Set from
 # the observed history, not guessed — see sanity_findings() in _share.r for the

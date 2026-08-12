@@ -450,11 +450,17 @@
       cycle and decreases the measurement noise. m uses only the months
       before the current month. Thus a new month does not change the values
       for the closed months.</p>
+      <p>Some months have no satellite data, for example in winter at high
+      latitudes. A 12-month average without the usual peak months of a cell
+      is too low, because it is an average of the low months only. When the
+      unobserved months usually hold a large part of the cell's annual NO₂,
+      keano shows no value for m.</p>
       <p>The score rules that use m can change. When a rule changes, keano
       calculates the full record again with the new rule. Then all the
-      months have scores from the same rule. The credit rule changed in
-      August 2026. The figures from before that date were larger for the
-      same decreases.</p>
+      months have scores from the same rule. The credit rule changed two
+      times in August 2026. The first change made the figures smaller for
+      the same decreases. The second change removed the records that came
+      from 12-month windows without the peak months.</p>
 
       <h3>The layers</h3>
       <p>The <b>Change</b> layer shows the speed at which m changes. There
@@ -502,14 +508,17 @@
       small decreases collect until their sum is more than the margin. A
       month that the neighbourhood check (below) sets to zero collects the
       same way.</p>
-      <p>There are two more rules. Only cells with m ≥ 30 µmol/m²
+      <p>There are three more rules. Only cells with m ≥ 30 µmol/m²
       receive scores, because percent changes have no meaning at the
       background noise level. NO₂ moves tens of kilometres. A record
       minimum can occur because the plume of an adjacent cell went to a
       different area for one year. Thus keano gives the full credit only
       when the region of approximately 1,770 km² around the cell is also
       below its own baseline. keano sets these isolated, improbable records
-      to zero.</p>
+      to zero. And a record must come from a window that saw the cell's
+      usual peak months: a low average over the low months only is not a
+      low level. A record from such a window is banked, and keano pays it
+      when the coverage returns.</p>
       <p>On the Credit layer, the hover chart shows a bar for each month in
       which the hexagon received credit. A taller bar shows more credit.
       The tooltip shows the exact figure. The line below the chart gives

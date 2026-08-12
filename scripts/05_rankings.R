@@ -29,19 +29,20 @@ ensure_dir(TMP_DIR)
 cells = as.data.table(read_parquet(file.path(DATA_LOOKUP, "cells.parquet")))
 shards = sort(unique(cells$shard))
 
-# The shipped credit rule is credit_v3 (see config and script 04): the baseline
-# is not held back a year, and the undercut is measured against the level the
-# cell was last paid at, so sub-margin steps carry forward instead of being
-# discarded. `credit`/`parent_under` below therefore carry the v3/v2 values.
-# The retired v1 and v2 columns stay in data/metrics as the audit trail and v1
+# The shipped credit rule is credit_v4 (see config and script 04): v3's
+# carried reference on a seasonally-gated m — a window missing the peak months
+# of the cell's cycle can neither be shown as a level nor set a record.
+# `m`/`credit`/`parent_under` below therefore carry the v4 values.
+# The retired v1-v3 columns stay in data/metrics as the audit trail and v1
 # is summarised alongside as *_v1, but nothing user-facing reads them.
-# `baseline` here is v2's expiring min — v3's actual reference is the last paid
+# `baseline` here is the expiring min — the actual reference is the last paid
 # level, which is not stored (it is a scan state, not a column).
 scan_shard = function(s) {
   mt = open_dataset(DATA_METRICS) |>
     filter(shard == s) |>
-    select(cell_id, month, no2, m, perf_short, baseline_v2, parent_under_v2,
-           credit_v3, is_record_v3, credit, eligible, is_record) |>
+    select(cell_id, month, no2, m = m_v4, perf_short = perf_short_v4,
+           baseline_v4, parent_under_v4,
+           credit_v4, is_record_v4, credit, eligible = eligible_v4, is_record) |>
     collect() |>
     as.data.table()
   if (nrow(mt) == 0) return(NULL)
@@ -50,16 +51,16 @@ scan_shard = function(s) {
     sum = mt[, .(
       n_cells_obs     = sum(!is.na(no2)),
       n_eligible      = sum(eligible, na.rm = TRUE),
-      n_records       = sum(is_record_v3, na.rm = TRUE),
-      total_credit    = sum(credit_v3, na.rm = TRUE),
+      n_records       = sum(is_record_v4, na.rm = TRUE),
+      total_credit    = sum(credit_v4, na.rm = TRUE),
       n_records_v1    = sum(is_record),
       total_credit_v1 = sum(credit, na.rm = TRUE),
       sum_perf_short  = sum(perf_short[eligible & !is.na(perf_short)]),
       n_perf_short    = sum(eligible & !is.na(perf_short))
     ), by = month],
-    rec = mt[is_record_v3 == TRUE,
-             .(cell_id, month, no2, m, baseline = baseline_v2,
-               parent_under = parent_under_v2, credit = credit_v3)]
+    rec = mt[is_record_v4 == TRUE,
+             .(cell_id, month, no2, m, baseline = baseline_v4,
+               parent_under = parent_under_v4, credit = credit_v4)]
   )
 }
 
