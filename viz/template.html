@@ -12,8 +12,11 @@
 <script src="https://unpkg.com/h3-js@4.5.0/dist/h3-js.umd.js"></script>
 <script src="https://unpkg.com/echarts@6.1.0/dist/echarts.min.js"></script>
 <style>
-  /* Committed single dark theme: a satellite-data viewer. */
+  /* Two themes, dark by default: a satellite-data viewer. The light variant
+     re-anchors the same hues to a light surface (accent/warn darkened to keep
+     ≥ 4.5:1 text contrast); the switch lives in the map control stack. */
   :root {
+    color-scheme: dark;
     --ground:  #0a1014;
     --panel:   #111a20;
     --panel-2: #16222a;
@@ -22,9 +25,32 @@
     --muted:   #6e8489;
     --accent:  #4fd6c2;   /* ke anu teal */
     --warn:    #e8873c;   /* worsening (semantic, not accent) */
+    --glass:   rgba(17, 26, 32, 0.94);    /* translucent cards over the map */
+    --scrim:   rgba(10, 16, 20, 0.72);    /* about overlay backdrop */
+    --attrib:  rgba(10, 16, 20, 0.75);
+    --accent-dim: rgba(79, 214, 194, 0.45);
+    --pressed: #1d403d;   /* ≈ 20% accent over the panel, kept opaque */
+    --on-accent: #0a1014;
     --mono: "SF Mono", "Cascadia Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
     --sans: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
     --chart-h: 74px;      /* global-signal sparkline; the mobile sheet is sized from it */
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --ground:  #e9eeed;
+    --panel:   #ffffff;
+    --panel-2: #eef3f2;
+    --line:    #d5e0de;
+    --ink:     #1f2e33;
+    --muted:   #5c7176;
+    --accent:  #0a7c6c;
+    --warn:    #b3560d;
+    --glass:   rgba(255, 255, 255, 0.94);
+    --scrim:   rgba(233, 238, 237, 0.72);
+    --attrib:  rgba(255, 255, 255, 0.75);
+    --accent-dim: rgba(10, 124, 108, 0.45);
+    --pressed: #cee5e2;
+    --on-accent: #ffffff;
   }
   * { box-sizing: border-box; margin: 0; }
   html, body { height: 100%; }
@@ -74,7 +100,7 @@
   /* --- About overlay ------------------------------------------------------- */
   #about {
     position: fixed; inset: 0;
-    background: rgba(10, 16, 20, 0.72);
+    background: var(--scrim);
     display: flex; align-items: center; justify-content: center;
     padding: 20px;
     z-index: 30;
@@ -127,7 +153,7 @@
   #sheet > * { pointer-events: auto; }
 
   #layer-card {
-    background: rgba(17, 26, 32, 0.94);
+    background: var(--glass);
     border: 1px solid var(--line);
     border-radius: 5px;
     padding: 9px 10px;
@@ -143,13 +169,31 @@
     white-space: nowrap;
   }
   .layers button:last-child { border-right: none; }
+  /* The map control stack follows the theme (maplibre ships it white-only):
+     panel background, themed separators, and — dark theme only — the shipped
+     background-image icons flipped with invert + hue-rotate, which lightens
+     the monochrome glyphs while keeping the globe icon's blue a blue. */
+  .maplibregl-ctrl-group { background: var(--panel); }
+  .maplibregl-ctrl-group button + button { border-top: 1px solid var(--line); }
+  :root:not([data-theme="light"]) .maplibregl-ctrl button .maplibregl-ctrl-icon,
+  :root:not([data-theme="light"]) .maplibregl-ctrl-attrib-button {
+    filter: invert(1) hue-rotate(180deg);
+  }
+  :root:not([data-theme="light"]) .maplibregl-ctrl button:not(:disabled):hover {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
   /* 3D toggle in the map control stack (matches maplibre's ctrl buttons) */
   .ctrl-3d button {
     font-family: var(--mono); font-size: 11.5px; font-weight: 600;
-    color: #333;
+    color: var(--ink);
   }
-  .ctrl-3d button[aria-pressed="true"] { background: var(--accent); color: #0a1014; }
-  .ctrl-3d button[aria-pressed="true"]:hover { background: #6de2d0; }
+  .ctrl-3d button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+  .ctrl-3d button[aria-pressed="true"]:hover { filter: brightness(1.12); }
+  /* theme switch, same stack; the inline SVG takes the button's color */
+  .ctrl-theme button {
+    display: flex; align-items: center; justify-content: center;
+    color: var(--ink);
+  }
   .legend { display: flex; align-items: center; gap: 8px; }
   .legend canvas { border-radius: 2px; flex: 1; min-width: 0; height: 10px; }
   .legend .lab {
@@ -161,7 +205,7 @@
   main { position: relative; flex: 1; min-height: 0; }
   #map { position: absolute; inset: 0; }
   #map .maplibregl-ctrl-attrib {
-    background: rgba(10, 16, 20, 0.75); font-size: 10px;
+    background: var(--attrib); font-size: 10px;
   }
   #map .maplibregl-ctrl-attrib a { color: var(--muted); }
 
@@ -177,12 +221,12 @@
   /* --- Region hover panel ------------------------------------------------ */
   #region-panel {
     margin-top: auto;
-    background: rgba(17, 26, 32, 0.94);
+    background: var(--glass);
     border: 1px solid var(--line);
     border-radius: 5px;
     padding: 11px 12px;
   }
-  #region-panel.pinned { border-color: rgba(79, 214, 194, 0.45); }
+  #region-panel.pinned { border-color: var(--accent-dim); }
   #region-panel[hidden] { display: none; }
   #region-panel .rp-head {
     display: flex; align-items: baseline; gap: 10px;
@@ -212,7 +256,7 @@
     color: var(--accent);
     font-family: var(--mono); font-size: 9.5px;
     letter-spacing: 0.07em; text-transform: uppercase;
-    border: 1px solid rgba(79, 214, 194, 0.45); border-radius: 3px;
+    border: 1px solid var(--accent-dim); border-radius: 3px;
     padding: 2px 5px;
   }
   #rp-pin:hover { border-color: var(--accent); }
@@ -232,7 +276,7 @@
   }
   .rp-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 9px; }
   /* the card the map is currently painted by */
-  .rp-metrics div.on { box-shadow: inset 0 0 0 1px rgba(79, 214, 194, 0.45); }
+  .rp-metrics div.on { box-shadow: inset 0 0 0 1px var(--accent-dim); }
   .rp-metrics div.on .k { color: var(--accent); }
   .rp-metrics div {
     background: var(--panel-2);
@@ -259,7 +303,7 @@
   aside {
     flex: 0 1 auto; min-height: 0;
     display: flex; flex-direction: column;
-    background: rgba(17, 26, 32, 0.94);
+    background: var(--glass);
     border: 1px solid var(--line);
     border-radius: 5px;
     overflow: hidden;
@@ -291,11 +335,11 @@
      and the horizon row is not a separate block. */
   .layers.sub { margin-top: -3px; border-color: var(--line); }
   .layers.sub button { padding: 4px 2px; font-size: 11px; color: var(--muted); }
-  /* Pressed state, both rows: an opaque accent-dark tint (≈ 20% accent over
-     the panel) + bright text. The card is translucent, so a bright map behind
+  /* Pressed state, both rows: an opaque accent tint (≈ 20% accent over the
+     panel) + full-contrast text. The card is translucent, so the map behind
      it washes out any subtler background shift — the tint has to be opaque.
      After the .sub rules, so it wins the color tie for the sub row too. */
-  .layers button[aria-pressed="true"] { background: #1d403d; color: var(--ink); }
+  .layers button[aria-pressed="true"] { background: var(--pressed); color: var(--ink); }
   .layers.sub[hidden] { display: none; }
   .top-block .layers.scope { margin: 8px 0 4px; }
   .top-block .layers.scope button { padding: 4px 2px; font-size: 11.5px; }
@@ -949,6 +993,73 @@ const RAMPS = {
 /* the added horizons reuse their family's ramp — same quantity, different span */
 RAMPS.trend5 = RAMPS.trend;
 RAMPS.credit12 = RAMPS.creditAll = RAMPS.credit;
+
+/* --- Theme: dark (default) + light variant ---------------------------------- */
+/* The light ramps re-anchor the same hue families to a light surface rather
+   than recolor: the sequential ramps run the dark steps in reverse, so low
+   values fade into the light basemap the way they fade into the dark one, and
+   high values pop dark instead of bright. The diverging Change ramp swaps its
+   dark midpoints for pale ones and darkens the poles, same teal/orange pair. */
+const RAMPS_LIGHT = {
+  m:      [...RAMPS.m].reverse(),
+  yoy:    ["#0a7c6c", "#4fae9d", "#d9e5e1", "#ecdcc4", "#cd7f30", "#a84f05"],
+  credit: [...RAMPS.credit].reverse()
+};
+RAMPS_LIGHT.trend = RAMPS_LIGHT.trend5 = RAMPS_LIGHT.yoy;
+RAMPS_LIGHT.credit12 = RAMPS_LIGHT.creditAll = RAMPS_LIGHT.credit;
+/* everything a theme touches outside CSS: chart inks, map paint, ramps, tiles */
+const PALETTES = {
+  dark: {
+    ink: "#d5e3e1", muted: "#6e8489", mutedSoft: "rgba(110,132,137,0.85)",
+    grid: "#223038", zero: "#31424c",
+    accent: "#4fd6c2", accent2: "#5fd6bd", warn: "#e8873c",
+    tipBg: "rgba(22, 34, 42, 0.96)", tipBorder: "#223038",
+    mapBg: "#0a1014",
+    hexLine: "rgba(213,227,225,0.14)", hexLineFine: "rgba(213,227,225,0.22)",
+    extHover: "#eafff8", extNeg: "#10181e",
+    tiles: "dark", ramps: RAMPS
+  },
+  light: {
+    ink: "#1f2e33", muted: "#5c7176", mutedSoft: "rgba(92,113,118,0.85)",
+    grid: "#dfe7e5", zero: "#b9c8c5",
+    accent: "#0a7c6c", accent2: "#0e8c7a", warn: "#b3560d",
+    tipBg: "rgba(255, 255, 255, 0.97)", tipBorder: "#d5e0de",
+    mapBg: "#e9eeed",
+    hexLine: "rgba(31,46,51,0.18)", hexLineFine: "rgba(31,46,51,0.25)",
+    extHover: "#083f36", extNeg: "#dde6e4",
+    tiles: "light", ramps: RAMPS_LIGHT
+  }
+};
+let themeName = (() => {
+  try { return localStorage.getItem("keano-theme") === "light" ? "light" : "dark"; }
+  catch (e) { return "dark"; }
+})();
+document.documentElement.dataset.theme = themeName;
+const PAL = () => PALETTES[themeName];
+const cartoTiles = kind => ["a", "b", "c", "d"].map(s =>
+  `https://${s}.basemaps.cartocdn.com/${PAL().tiles}_${kind}/{z}/{x}/{y}.png`);
+function applyTheme(name) {
+  themeName = name;
+  document.documentElement.dataset.theme = name;
+  try { localStorage.setItem("keano-theme", name); } catch (e) {}
+  ctrlTheme.sync();
+  const paintMap = () => {
+    map.getSource("basemap").setTiles(cartoTiles("nolabels"));
+    map.getSource("labels").setTiles(cartoTiles("only_labels"));
+    map.setPaintProperty("bg", "background-color", PAL().mapBg);
+    if (map.getLayer("r3-line")) {
+      map.setPaintProperty("r3-line", "line-color", PAL().hexLine);
+      map.setPaintProperty("fine-line", "line-color", PAL().hexLineFine);
+      applyLayerPaint(activeLayer);   // fill ramps, opacity, 3D colors
+    }
+  };
+  // a click can land before the style has loaded; repaint then instead
+  if (map.getSource("basemap")) paintMap(); else map.once("load", paintMap);
+  drawLegend();
+  drawCharts();
+  // re-render an open region panel so its chart picks up the new inks
+  if (shownFeature && !rp.panel.hidden) { shownRegion = null; showRegion(shownFeature); }
+}
 /* Three primary layers, two of which pick a horizon. `activeLayer` stays the
    flat effective key ("trend5", "credit12", …) so the paint expressions, scales
    and hash keep one dimension instead of two. */
@@ -1021,8 +1132,9 @@ function writeHash() {
 }
 
 function fillExpr(key) {
+  const ramp = PAL().ramps[key];
   const e = ["interpolate", ["linear"], ["get", layerDef(key).prop]];
-  RAMPS[key].forEach((c, i) => e.push(i / (RAMPS[key].length - 1), c));
+  ramp.forEach((c, i) => e.push(i / (ramp.length - 1), c));
   return ["case", ["<", ["get", layerDef(key).prop], 0], "rgba(0,0,0,0)", e];
 }
 
@@ -1074,8 +1186,8 @@ function heightExpr(key, res) {
 }
 function extColorExpr(key) {
   return ["case",
-          ["boolean", ["feature-state", "hover"], false], "#eafff8",
-          ["<", ["get", layerDef(key).prop], 0], "#10181e",
+          ["boolean", ["feature-state", "hover"], false], PAL().extHover,
+          ["<", ["get", layerDef(key).prop], 0], PAL().extNeg,
           fillExpr(key)];
 }
 function apply3dPaint(key) {
@@ -1130,20 +1242,18 @@ const map = new maplibregl.Map({
     sources: {
       basemap: {
         type: "raster",
-        tiles: ["a", "b", "c", "d"].map(s =>
-          `https://${s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png`),
+        tiles: cartoTiles("nolabels"),
         tileSize: 256, maxzoom: 19,
         attribution: "© OpenStreetMap contributors © CARTO"
       },
       labels: {   // drawn above the hex fills, so text stays readable
         type: "raster",
-        tiles: ["a", "b", "c", "d"].map(s =>
-          `https://${s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png`),
+        tiles: cartoTiles("only_labels"),
         tileSize: 256, maxzoom: 19
       }
     },
     layers: [
-      { id: "bg", type: "background", paint: { "background-color": "#0a1014" } },
+      { id: "bg", type: "background", paint: { "background-color": PAL().mapBg } },
       { id: "basemap", type: "raster", source: "basemap",
         paint: { "raster-opacity": 0.85 } }
     ]
@@ -1159,6 +1269,34 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }));
 if (maplibregl.GlobeControl) map.addControl(new maplibregl.GlobeControl());
+/* theme switch: one fixed half-filled circle (an SVG, not a font glyph — ◐
+   renders wildly differently across platforms); only the tooltip flips */
+const ctrlTheme = {
+  btn: null,
+  onAdd() {
+    const div = document.createElement("div");
+    div.className = "maplibregl-ctrl maplibregl-ctrl-group ctrl-theme";
+    const b = this.btn = document.createElement("button");
+    b.type = "button";
+    b.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">' +
+      '<circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
+      '<path d="M8 1.8 a6.2 6.2 0 0 1 0 12.4 Z" fill="currentColor"/></svg>';
+    b.addEventListener("click", () =>
+      applyTheme(themeName === "dark" ? "light" : "dark"));
+    div.appendChild(b);
+    this.sync();
+    return div;
+  },
+  sync() {
+    if (!this.btn) return;
+    this.btn.title = "Switch to " +
+      (themeName === "dark" ? "light" : "dark") + " theme";
+    this.btn.setAttribute("aria-label", this.btn.title);
+  },
+  onRemove() {}
+};
+map.addControl(ctrlTheme);
 /* 3D mode is currently not exposed in the UI — re-enable by adding the
    control below back to the map (map.addControl(ctrl3d)); the mode itself
    still works via setMode3d(true) from the console. */
@@ -1212,7 +1350,7 @@ function setupMap() {
   map.addLayer({
     id: "r3-line", type: "line", source: "r3",
     minzoom: 3, maxzoom: Z4 + 0.4,
-    paint: { "line-color": "rgba(213,227,225,0.14)", "line-width": 0.5 }
+    paint: { "line-color": PAL().hexLine, "line-width": 0.5 }
   });
   map.addLayer({
     id: "fine-fill", type: "fill", source: "fine", minzoom: Z4,
@@ -1221,7 +1359,7 @@ function setupMap() {
   });
   map.addLayer({
     id: "fine-line", type: "line", source: "fine", minzoom: 7.5,
-    paint: { "line-color": "rgba(213,227,225,0.22)", "line-width": 0.5 }
+    paint: { "line-color": PAL().hexLineFine, "line-width": 0.5 }
   });
   map.addLayer({
     id: "r3-3d", type: "fill-extrusion", source: "r3", maxzoom: Z4 + 0.4,
@@ -1522,10 +1660,10 @@ function ecTooltip(formatter) {
   return {
     trigger: "axis", appendToBody: true, transitionDuration: 0,
     axisPointer: { type: "line", snap: true, z: 0,
-                   lineStyle: { color: "#31424c", width: 1 }, label: { show: false } },
-    backgroundColor: "rgba(22, 34, 42, 0.96)",
-    borderColor: "#223038", borderWidth: 1, padding: [5, 8],
-    textStyle: { color: "#d5e3e1", fontFamily: MONO, fontSize: 11 },
+                   lineStyle: { color: PAL().zero, width: 1 }, label: { show: false } },
+    backgroundColor: PAL().tipBg,
+    borderColor: PAL().tipBorder, borderWidth: 1, padding: [5, 8],
+    textStyle: { color: PAL().ink, fontFamily: MONO, fontSize: 11 },
     formatter
   };
 }
@@ -1535,9 +1673,9 @@ function ecXAxis(months, bar) {
     type: "category", data: months, boundaryGap: !!bar,
     axisLine: { show: false }, axisTick: { show: false },
     axisLabel: { interval: (i) => evenJan(i), formatter: v => v.slice(0, 4),
-                 color: "#6e8489", fontFamily: MONO, fontSize: 9.5, margin: 5 },
+                 color: PAL().muted, fontFamily: MONO, fontSize: 9.5, margin: 5 },
     splitLine: { show: true, interval: (i) => evenJan(i),
-                 lineStyle: { color: "#223038", width: 1 } }
+                 lineStyle: { color: PAL().grid, width: 1 } }
   };
 }
 
@@ -1558,7 +1696,7 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
     rp.cred.textContent = "";
     rp.note.textContent = "";
     ch.setOption({ graphic: [{ type: "text", left: 8, top: "middle",
-      style: { text: "history loading …", fill: "#6e8489", font: "9.5px " + MONO } }] }, true);
+      style: { text: "history loading …", fill: PAL().muted, font: "9.5px " + MONO } }] }, true);
     return;
   }
   pendingChart = null;
@@ -1593,12 +1731,12 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
   } else if (events.length) {
     let best = events[0];
     for (const e of events) if (e[1] > best[1]) best = e;
-    setCredNote("⬢", "#5fd6bd",
+    setCredNote("⬢", PAL().accent2,
       "paid " + events.length + "/" + NM + " mo · peak " +
       credFmt(credHist(evRes, best[1])) + " " +
       monthName(META.months[best[0]]) + whose);
   } else {
-    setCredNote("⬡", "#6e8489", "never paid in " + NM + " mo" + whose);
+    setCredNote("⬡", PAL().muted, "never paid in " + NM + " mo" + whose);
   }
 
   /* One chart, three views, switched by the primary layer group, so the panel
@@ -1625,7 +1763,7 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
     if (hi === 0) hi = 1;
     series = [{
       name: "credit paid", type: "bar", data: bars, z: 3, barMinHeight: 1,
-      itemStyle: { color: "#4fd6c2" }, emphasis: { disabled: true }
+      itemStyle: { color: PAL().accent }, emphasis: { disabled: true }
     }];
     yFmt = credFmt;
     tipFmt = ps => {
@@ -1633,7 +1771,7 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
       if (!p) return "";
       const v = bars[p.dataIndex];
       return p.axisValue + "<br>" + (v != null
-        ? "<span style=\"color:#5fd6bd\">⬢</span> credit&nbsp; " + credFmt(v)
+        ? "<span style=\"color:" + PAL().accent2 + "\">⬢</span> credit&nbsp; " + credFmt(v)
         : "⬡ no credit");
     };
     note = "credit paid by month" + suffix + ", " + range;
@@ -1657,18 +1795,18 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
     yLabels = [lo, hi];
     series = [{
       type: "line", data: yoy, symbol: "none", z: 3, emphasis: { disabled: true },
-      lineStyle: { width: 1.4, color: "#d5e3e1" }, itemStyle: { color: "#d5e3e1" },
+      lineStyle: { width: 1.4, color: PAL().ink }, itemStyle: { color: PAL().ink },
       markPoint: { silent: true, symbol: "circle", symbolSize: 4.8, animation: false,
-                   itemStyle: { color: "#d5e3e1" }, label: { show: false },
+                   itemStyle: { color: PAL().ink }, label: { show: false },
                    data: lastJ >= 0 ? [{ coord: [lastJ, yoy[lastJ]] }] : [] },
       markLine: lo < 0 ? {
         silent: true, symbol: "none", animation: false, label: { show: false },
-        lineStyle: { color: "#31424c", type: "solid", width: 1 },
+        lineStyle: { color: PAL().zero, type: "solid", width: 1 },
         data: [{ yAxis: 0 }]
       } : { data: [] }
     }];
     /* fills split at zero, same language as the global YoY chart */
-    for (const [clamp, color] of [[Math.max, "#e8873c"], [Math.min, "#4fd6c2"]]) {
+    for (const [clamp, color] of [[Math.max, PAL().warn], [Math.min, PAL().accent]]) {
       series.push({
         type: "line", data: yoy.map(v => v == null ? null : clamp(v, 0)),
         symbol: "none", silent: true, z: 1, emphasis: { disabled: true },
@@ -1701,26 +1839,26 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
       marks.push({ coord: [lastJ, lead[lastJ]] });
       if (!own && cellNow != null) { // □ the hovered sub-hex's current value
         marks.push({ coord: [lastJ, cellNow], symbol: "rect", symbolSize: 5,
-          itemStyle: { color: "rgba(0,0,0,0)", borderColor: "#d5e3e1", borderWidth: 1.2 } });
+          itemStyle: { color: "rgba(0,0,0,0)", borderColor: PAL().ink, borderWidth: 1.2 } });
       }
     }
     series = [{
       name: own ? "res-3 region" : "12-mo mean",
       type: "line", data: vals, symbol: "none",
-      lineStyle: { width: own ? 1.1 : 1.4, color: own ? "rgba(110,132,137,0.85)" : "#4fd6c2" },
-      itemStyle: { color: own ? "#6e8489" : "#4fd6c2" },
+      lineStyle: { width: own ? 1.1 : 1.4, color: own ? PAL().mutedSoft : PAL().accent },
+      itemStyle: { color: own ? PAL().muted : PAL().accent },
       emphasis: { disabled: true }
     }];
     if (own) {
       series.push({
         name: "this hex", type: "line", data: own, symbol: "none", z: 3,
-        lineStyle: { width: 1.4, color: "#4fd6c2" }, itemStyle: { color: "#4fd6c2" },
+        lineStyle: { width: 1.4, color: PAL().accent }, itemStyle: { color: PAL().accent },
         emphasis: { disabled: true }
       });
     }
     series[series.length - 1].markPoint = {
       silent: true, symbol: "circle", symbolSize: 4.8, animation: false,
-      itemStyle: { color: "#4fd6c2" }, label: { show: false }, data: marks
+      itemStyle: { color: PAL().accent }, label: { show: false }, data: marks
     };
     yLabels = [lo, hi];
     yFmt = v => fmt.m(v);
@@ -1750,7 +1888,7 @@ function drawRegionChart(r3i, cellNow, ser, cred, res) {
       type: "value", min: lo, max: hi, position: "right",
       axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false },
       axisLabel: { customValues: yLabels, formatter: yFmt,
-                   color: "#6e8489", fontFamily: MONO, fontSize: 9.5, margin: 4 }
+                   color: PAL().muted, fontFamily: MONO, fontSize: 9.5, margin: 4 }
     },
     series
   }, true);
@@ -1813,7 +1951,7 @@ renderSubs(groupOf(activeLayer));
 function hex2rgb(h) { return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); }
 function drawLegend() {
   const cv = document.getElementById("legend-bar"), c = cv.getContext("2d");
-  const stops = RAMPS[activeLayer].map(hex2rgb);
+  const stops = PAL().ramps[activeLayer].map(hex2rgb);
   const img = c.createImageData(cv.width, 1);
   for (let x = 0; x < cv.width; x++) {
     const t = x / (cv.width - 1) * (stops.length - 1);
@@ -1853,13 +1991,13 @@ function drawSeries(id, vals, months, opts) {
                  data: lastJ >= 0 ? [{ coord: [lastJ, vals[lastJ]] }] : [] },
     markLine: lo < 0 ? {
       silent: true, symbol: "none", animation: false, label: { show: false },
-      lineStyle: { color: "#31424c", type: "solid", width: 1 },
+      lineStyle: { color: PAL().zero, type: "solid", width: 1 },
       data: [{ yAxis: 0 }]
     } : { data: [] }
   }];
   if (opts.diverging) {
     /* fills split at zero, carried by silent clamped copies of the series */
-    for (const [clamp, color] of [[Math.max, "#e8873c"], [Math.min, "#4fd6c2"]]) {
+    for (const [clamp, color] of [[Math.max, PAL().warn], [Math.min, PAL().accent]]) {
       series.push({
         type: "line", data: vals.map(v => v == null ? null : clamp(v, 0)), symbol: "none",
         silent: true, z: 1, emphasis: { disabled: true },
@@ -1890,15 +2028,15 @@ function drawCharts() {
   const first = SG.findIndex(r => r.perf !== 0);
   drawSeries("chart-perf",
              SG.map((r, i) => first < 0 || i < first ? null : r.perf * 100), months,
-             { diverging: true, color: "#d5e3e1",
+             { diverging: true, color: PAL().ink,
                fmt: v => (v > 0 ? "+" : "") + v.toFixed(1) + "%" });
   drawSeries("chart-credit", SG.map(r => r.credit), months,
-             { bar: true, color: "#4fd6c2",
+             { bar: true, color: PAL().accent,
                fmt: v => Math.round(v).toLocaleString("en-US") });
   const last = SG[SG.length - 1];
   const p = document.getElementById("perf-now");
   p.textContent = (last.perf > 0 ? "+" : "") + (last.perf * 100).toFixed(1) + "%";
-  p.style.color = last.perf > 0 ? "#e8873c" : "#4fd6c2";
+  p.style.color = last.perf > 0 ? PAL().warn : PAL().accent;
   document.getElementById("credit-now").textContent =
     Math.round(last.credit).toLocaleString("en-US");
 }
