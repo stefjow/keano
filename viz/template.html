@@ -345,6 +345,25 @@
   .layers.sub[hidden] { display: none; }
   .top-block .layers.scope { margin: 8px 0 4px; }
   .top-block .layers.scope button { padding: 4px 2px; font-size: 11.5px; }
+  /* The pager rides in the heading row, not under the table: the deeper pages
+     then cost no vertical space at all, and the block keeps one fixed height.
+     Arrows only — ten page numbers would not clear the longest title
+     ("Top regions — last 12 months") in a 336px rail, let alone the sheet. */
+  .top-block h3 { display: flex; align-items: baseline; gap: 8px; }
+  .top-block h3 .pager {
+    margin-left: auto; flex: none;
+    display: flex; align-items: baseline; gap: 1px;
+    font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0; text-transform: none;
+    font-variant-numeric: tabular-nums;
+  }
+  .top-block h3 .pager[hidden] { display: none; }
+  .top-block h3 .pager button {
+    color: var(--muted); font-family: var(--mono); font-size: 12px;
+    line-height: 1; padding: 1px 4px; border-radius: 3px;
+  }
+  .top-block h3 .pager button:hover:not(:disabled) { color: var(--accent); }
+  .top-block h3 .pager button:disabled { opacity: 0.3; cursor: default; }
   .top-block table { width: 100%; border-collapse: collapse; font-size: 12px; }
   .top-block td {
     padding: 4px 2px;
@@ -389,6 +408,10 @@
       padding: 7px 8px; gap: 6px;
     }
     .layers button { padding: 5px 2px; font-size: 11.5px; }
+    /* thumb-sized arrows. This does push the heading row from 14 to 22px, but
+       a tap target you can hit is worth 8px when the pager is what keeps the
+       other ninety rows off the sheet entirely. */
+    .top-block h3 .pager button { padding: 5px 8px; }
     #sheet {
       position: absolute; left: 8px; right: 8px; bottom: 8px;
       gap: 8px;
@@ -564,7 +587,7 @@
             <div id="chart-credit" class="chart"></div>
           </div>
           <div class="top-block">
-            <h3 id="top-title">Top regions</h3>
+            <h3><span id="top-title">Top regions</span><span class="pager" id="top-pager" hidden></span></h3>
             <table id="top-table"></table>
             <p class="note" id="top-note"></p>
           </div>
@@ -1108,9 +1131,9 @@ const isChange = key => key === "yoy" || key === "trend" || key === "trend5";
 const CREDIT_SCOPE = { credit: "month", credit12: "12m", creditAll: "all" };
 /* window -> [fine-tier plane, scale suffix, wording] */
 const SCOPE_PLANE = {
-  month: ["tc", "",  "this month",              "nc"],
-  "12m": ["cy", "y", "over the last 12 months", "ny"],
-  all:   ["ca", "a", "over the full record",    "na"]   // wording as the res-3 note
+  month: ["tc", "",  "this month",     "nc"],
+  "12m": ["cy", "y", "last 12 months", "ny"],
+  all:   ["ca", "a", "all time",       "na"]   // [2] labels the window in the note
 };
 /* Hash routing: #<layer>, #<layer>/<h3-id> (deep link to a hex) or
    #<layer>/@<lat>,<lng>,<zoom> (deep link to a view) */
@@ -2079,6 +2102,43 @@ function topRow(i, cells, lat, lng, zoom, id) {
   tr.append(...tds, tdLoc);
   return tr;
 }
+/* Paging. Ten rows a page, ten pages deep — past a hundred entries the ranking
+   is no longer telling you anything you came for, and the tail is unbounded. */
+const TOP_PER_PAGE = 10, TOP_MAX_PAGES = 10;
+let topPage = 0;             // 0-based
+let topPageKey = "";         // resolution + window; a change in either resets
+
+/* Renders the ‹ n/N › control and returns the slice bounds for `total` rows.
+   The page is clamped, never reset, when a pan shortens the list: a small nudge
+   of the map should not throw you back to page 1 (the rows are re-ranked from
+   the new viewport either way). */
+function topPageSlice(total, key) {
+  if (key !== topPageKey) { topPageKey = key; topPage = 0; }
+  const pages = Math.min(TOP_MAX_PAGES, Math.max(1, Math.ceil(total / TOP_PER_PAGE)));
+  if (topPage >= pages) topPage = pages - 1;
+  const el = document.getElementById("top-pager");
+  el.textContent = "";
+  el.hidden = pages < 2;
+  if (!el.hidden) {
+    const step = (d, lab, off) => {
+      const b = document.createElement("button");
+      b.textContent = lab;
+      b.disabled = off;
+      b.setAttribute("aria-label", d < 0 ? "Previous page" : "Next page");
+      b.addEventListener("click", () => { topPage += d; updateTopRegions(); });
+      return b;
+    };
+    const n = document.createElement("span");
+    n.textContent = (topPage + 1) + "/" + pages;
+    el.append(step(-1, "‹", topPage === 0), n, step(1, "›", topPage === pages - 1));
+  }
+  const from = topPage * TOP_PER_PAGE;
+  return [from, Math.min(total, from + TOP_PER_PAGE)];
+}
+function topPagerHide() {
+  const el = document.getElementById("top-pager");
+  el.textContent = ""; el.hidden = true;
+}
 function topEmpty(txt) {
   const tr = document.createElement("tr");
   const td = document.createElement("td");
@@ -2091,7 +2151,26 @@ const inLng = (lo, w, e) =>
   (lo - 360 >= w && lo - 360 <= e);
 
 /* mean H3 hexagon area, for the note that explains what a Σ row covers */
-const TIER_KM2 = { 4: "1,770", 5: "253" };
+const TIER_KM2 = { 3: "12,400", 4: "1,770", 5: "253" };
+
+/* One legend for every tier and window, where the two branches below used to
+   write the same sentence twice in slightly different words. Kept terse: it is
+   the tallest thing in the block, and the window it names is already on the
+   pressed button and in the title, so it does not need spelling out a third
+   time with its date range. Only a lone res-6 cell in the month window is its
+   own undercut, and so a percentage; everything else is a sum. */
+function topNote(r, scope) {
+  const win = SCOPE_PLANE[scope][2];
+  if (r === 6)
+    return scope === "month"
+      ? "% = this cell’s credit this month: undercut of its own 5-year low × " +
+        "neighbourhood weight. → flies."
+      : "Σ = credit paid to this cell, " + win + ". → flies.";
+  return "Σ = credit across a ~" + TIER_KM2[r] + " km² " +
+    (r === 3 ? "region" : "area") + ", " + win +
+    " · c = its credited res-6 cells" +
+    (scope === "month" ? "; zoom in for them" : "") + ". → flies.";
+}
 
 function updateTopRegions() {
   if (!R3) return;   // scope toggle clicked before the core data arrived
@@ -2115,6 +2194,7 @@ function updateTopRegions() {
     const T = TIERS[r];
     if (!T.chunks && !tierReady(r)) {   // t4/t5 still fetching; refresh queued
       tb.appendChild(topEmpty("loading…"));
+      topPagerHide();
       return;
     }
     /* loaded chunks only — updateFine is already fetching the missing ones */
@@ -2146,21 +2226,12 @@ function updateTopRegions() {
         }
       }
     }
-    /* Only res-6 in the month window is a single cell's own undercut, and so a
-       percentage. Everything else is a sum — over child hexes, over months, or
-       both — and reads as Σ. */
     cand.sort((a, z) => z[0] - a[0]);
     title.textContent = (r === 6 ? "Top cells" : "Top areas") + " — in view";
-    note.textContent = (r === 6 && topScope === "month"
-      ? "% = the cell’s paid credit this month (undercut of its own lowest " +
-        "month in the past 5 years × neighbourhood weight)."
-      : (r === 6 ? "Σ = credit paid to this cell " + winLab
-                 : "Σ = paid credit summed over the res-6 cells of a ~" +
-                   TIER_KM2[r] + " km² area " + winLab +
-                   ", with the number of them that earned") +
-        (topScope === "month" ? ". Zoom in for individual cells" : "") + ".") +
-      " Click → to fly.";
-    cand.slice(0, 10).forEach(([cr, la, lo, id, cnt], i) => {
+    note.textContent = topNote(r, topScope);
+    const [from, to] = topPageSlice(cand.length, r + "/" + topScope);
+    cand.slice(from, to).forEach(([cr, la, lo, id, cnt], k) => {
+      const i = from + k;   // rank runs on across pages: page 2 starts at 11
       const cells = [["rk", String(i + 1)], ["", fmtCoord(la, lo)]];
       if (cnt != null) cells.push(["", cnt + "c"]);   // res-4/5 only
       cells.push(["cr", fmt[ckey](cr)]);
@@ -2190,23 +2261,14 @@ function updateTopRegions() {
     idxs.push(j);
   }
   idxs.sort((a, z) => crArr[z] - crArr[a]);
-  const ms = META.months;
-  const winLabel = monthName(ms[Math.max(0, ms.length - 12)]) +
-    " – " + monthName(META.month);
-  const scopeName = topScope === "12m" ? "last 12 months"
-                  : topScope === "all" ? "all time" : monthName(META.month);
+  /* The title spells the month out in full; the note's short label would read
+     oddly as a heading ("Top regions — this month"). */
+  const scopeName = topScope === "month" ? monthName(META.month) : winLab;
   title.textContent = "Top regions — " + (global ? scopeName : "in view");
-  note.textContent = "Σ = paid credit summed over the res-6 cells of a " +
-    "~12,400 km² region " + (
-      topScope === "12m" ? "over the last 12 months (" + winLabel + "), " +
-        "with the number of distinct credited cells. "
-      : topScope === "all" ? "over the full record (since " + monthName(ms[0]) +
-        "), with the number of distinct credited cells. "
-      : "this month, with the number of credited cells. " +
-        "Zoom in for individual cells. ") +
-    "Click → to fly.";
-  idxs.slice(0, 10).forEach((j, i) => {
-    const cr = crArr[j];
+  note.textContent = topNote(3, topScope);
+  const [from, to] = topPageSlice(idxs.length, "3/" + topScope);
+  idxs.slice(from, to).forEach((j, k) => {
+    const i = from + k, cr = crArr[j];
     tb.appendChild(topRow(i, [
       ["rk", String(i + 1)], ["", fmtCoord(r3Lat[j], r3Lng[j])],
       ["", ncArr[j] + "c"],

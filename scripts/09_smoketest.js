@@ -14,8 +14,9 @@
  *                 panel, hex and viewport deep links;
  *   layer control — the three primary layers, the horizons under Change and
  *                 Credit, their scales and hash round-trip;
- *   top regions — the three credit-window scopes, and → flying to a hex in
- *                 every tier the map draws without leaving that tier;
+ *   top regions — the three credit-window scopes, → flying to a hex in every
+ *                 tier the map draws without leaving that tier, and the
+ *                 heading pager (10 rows × 10 pages, ranks running on);
  *   touch       — default headless (hover:none): tap pins, × dismisses.
  *
  * Needs: npm install (puppeteer-core), a Chrome under ~/.cache/puppeteer
@@ -325,6 +326,10 @@ const topState = page => page.evaluate(() => {
     title: document.getElementById("top-title").textContent,
     note: document.getElementById("top-note").textContent,
     rows: document.querySelectorAll("#top-table button.loc").length,
+    pager: document.getElementById("top-pager").hidden ? null
+             : document.querySelector("#top-pager span").textContent,
+    pagerOff: [...document.querySelectorAll("#top-pager button")].map(b => b.disabled),
+    ranks: [...document.querySelectorAll("#top-table .rk")].map(td => td.textContent),
     rowVals: [...document.querySelectorAll("#top-table tr")]
                .map(tr => tr.querySelector(".cr")?.textContent),
     rowCells: [...document.querySelectorAll("#top-table tr")]
@@ -354,6 +359,11 @@ function okCreditMarkers(st, label) {
 const settleTop = page =>
   page.waitForFunction(() => document.querySelector("#top-table button.loc"),
                        { timeout: 30000 }).catch(() => {});
+
+/* ‹ is button 0, › is button 1; the table redraws synchronously from data the
+   page already has, so there is nothing to settle afterwards. */
+const clickPage = (page, i) =>
+  page.evaluate(n => document.querySelectorAll("#top-pager button")[n]?.click(), i);
 
 async function zoomTo(page, zoom) {
   await page.evaluate(z => new Promise(r => {
@@ -390,7 +400,7 @@ async function topRegionsRun(browser, base) {
 
   /* Every window fills the table, labels itself, marks its own button, and
      says in the note which window it is showing. */
-  const WIN_WORD = ["this month", "over the last 12 months", "over the full record"];
+  const WIN_WORD = ["this month", "last 12 months", "all time"];
   for (let i = scopes.length - 1; i >= 0; i--) {
     await pickSub(page, i);
     await settleTop(page);
@@ -422,7 +432,7 @@ async function topRegionsRun(browser, base) {
        "res-" + res + " list titles itself “" + st.title + "”");
     /* wording has to distinguish the tiers, not just be present: the res-3
        note also carries a Σ and a km² figure ("region", not "area") */
-    ok(st.note.includes(res === 6 ? "past 5 years" : "km² area"),
+    ok(st.note.includes(res === 6 ? "5-year low" : "km² area"),
        "res-" + res + " note explains " + (res === 6 ? "a per-cell %" : "a Σ over children"));
     ok(st.rows > 0, "res-" + res + " lists " + st.rows + " credited hex(es) in view");
     if (!st.rows) continue;
@@ -478,6 +488,44 @@ async function topRegionsRun(browser, base) {
          rowVal + " vs " + cards.values[1] + ")");
     }
   }
+
+  /* The pager: ten rows a page, ten pages deep, ranks running on across pages.
+     It lives in the heading so the deeper pages cost no vertical space, which
+     only holds while the rank column stays absolute — a slice that restarted
+     at 1 on every page would make → fly to a rank the reader cannot name. */
+  await pickSub(page, 0);
+  await zoomTo(page, 1.4);   // whole world: the longest list there is
+  let p = await topState(page);
+  ok(p.pager && /^1\/\d+$/.test(p.pager), "world view opens on page 1 (" + p.pager + ")");
+  const pages = +String(p.pager).split("/")[1];
+  ok(pages <= 10, "never offers more than 10 pages (" + pages + ")");
+  ok(p.pagerOff[0] === true, "‹ is dead on page 1");
+  ok(p.ranks.join() === "1,2,3,4,5,6,7,8,9,10", "page 1 ranks 1..10");
+  await clickPage(page, 1);
+  p = await topState(page);
+  ok(p.pager === "2/" + pages, "› advances a page (" + p.pager + ")");
+  ok(p.ranks[0] === "11" && p.ranks[9] === "20", "page 2 ranks 11..20, not 1..10");
+  for (let i = 2; i < pages; i++) await clickPage(page, 1);
+  p = await topState(page);
+  ok(p.pager === pages + "/" + pages && p.pagerOff[1] === true,
+     "› is dead on the last page (" + p.pager + ")");
+  /* Clamp, not reset: a pan that shortens the list drops you to its last page,
+     and a pan back to a longer one leaves you where you were. */
+  await clickPage(page, 0);
+  const deep = +String((await topState(page)).pager).split("/")[0];
+  await zoomTo(page, 3.4);
+  p = await topState(page);
+  const now = p.pager ? +p.pager.split("/")[0] : 1;
+  const fewer = p.pager ? +p.pager.split("/")[1] : 1;
+  ok(now === Math.min(deep, fewer),
+     "a shorter list clamps the page rather than resetting it (" + deep +
+     " → " + (p.pager || "hidden") + ")");
+  /* but changing the credit window is a different ranking entirely — page 1 */
+  await pickSub(page, 1);
+  await settleTop(page);
+  p = await topState(page);
+  ok(!p.pager || p.pager.startsWith("1/"),
+     "a new credit window starts at page 1 (" + (p.pager || "hidden") + ")");
 
   ok(errors.length === 0, "no page errors / failed local requests" +
      (errors.length ? " — " + errors.join("; ") : ""));
@@ -629,8 +677,8 @@ async function layerRun(browser, base) {
      #creditAll painted all-time credit while the list still ranked last month —
      the map and the table disagreed until you touched the control. */
   for (const [key, want] of [["credit", "this month"],
-                             ["credit12", "over the last 12 months"],
-                             ["creditAll", "over the full record"]]) {
+                             ["credit12", "last 12 months"],
+                             ["creditAll", "all time"]]) {
     const dl = await newPage(browser, base + "#" + key);
     const note = await $text(dl.page, "#top-note");
     ok(note.includes(want),
