@@ -2164,12 +2164,12 @@ function topNote(r, scope) {
   if (r === 6)
     return scope === "month"
       ? "% = this cell’s credit this month: undercut of its own 5-year low × " +
-        "neighbourhood weight. → flies."
-      : "Σ = credit paid to this cell, " + win + ". → flies.";
+        "neighbourhood weight."
+      : "Σ = credit paid to this cell, " + win + ".";
   return "Σ = credit across a ~" + TIER_KM2[r] + " km² " +
     (r === 3 ? "region" : "area") + ", " + win +
     " · c = its credited res-6 cells" +
-    (scope === "month" ? "; zoom in for them" : "") + ". → flies.";
+    (scope === "month" ? "; zoom in for them" : "") + ".";
 }
 
 function updateTopRegions() {
