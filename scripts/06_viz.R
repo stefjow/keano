@@ -186,6 +186,21 @@ crh3   = rbindlist(lapply(res, `[[`, "crh3"))
 crmax_h = do.call(pmax, lapply(res, `[[`, "crmax"))
 rm(res)
 
+# --- Trim the month axis to the first month that carries data -----------------
+# m needs MIN_MONTHS_IN_WINDOW observed months in its trailing window, so the
+# first months of the panel can never hold an m (or credit) for any cell — on
+# the charts they were blank space left of every series. Drop them from the viz
+# axis; the metrics upstream keep the full range, the windows are computed
+# there. Derived from the data rather than the config because the seasonal-
+# coverage gate can defer the first m past the plain count floor.
+first_m = min(c(ser$month, crh3$month))
+if (first_m > months_all[1]) {
+  message("Axis: dropping ", months_all[1], " … ", first_m,
+          " (exclusive) — no m or credit anywhere before ", first_m)
+  months_all = months_all[months_all >= first_m]
+  nm = length(months_all)
+}
+
 # --- res-3 alignment + res-4/5 aggregates -------------------------------------
 # The series can contain res-3 cells with history but no latest-month row;
 # align r3last to the union (missing metrics become NA -> level 0).
@@ -311,6 +326,7 @@ add_sec = function(name, r) {
 
 ser[, i := chmatch(r3, r3_ids)]
 ser[, j := chmatch(month, months_all)]
+stopifnot(!anyNA(ser$j))   # the axis trim above must not orphan any m month
 t_ser = rep(NA_real_, nP * nm)
 t_ser[(ser$i - 1L) * nm + ser$j] = t_m(ser$sum_m / ser$n_m)
 
@@ -406,8 +422,11 @@ message("Container: ", round(length(bin) / 2^20, 1), " MB raw -> ",
 
 # --- Global series, top list, stats ------------------------------------------------
 monthly = fread(file.path(DATA_RANKINGS, "monthly_summary.csv"))
-series_global = monthly[, .(month, credit = round(total_credit, 1),
-                            perf = round(mean_perf_short_eligible, 5))]
+# same axis start as the hover chart: the trimmed months carry no signal here
+# either (credit sums to 0, YoY is nulled client-side before its first value)
+series_global = monthly[month >= months_all[1],
+                        .(month, credit = round(total_credit, 1),
+                          perf = round(mean_perf_short_eligible, 5))]
 stats = as.list(monthly[month == latest,
                         .(n_cells_obs, n_eligible, n_records,
                           total_credit = round(total_credit))])
