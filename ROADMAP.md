@@ -1,8 +1,9 @@
 # Roadmap notes
 
 Ideas collected 2026-08-07 after the ECharts / selection-model session,
-extended 2026-08-08 by the provenance / hardening session and 2026-08-10 by
-the tier fly-to / credit-history session.
+extended 2026-08-08 by the provenance / hardening session, 2026-08-10 by
+the tier fly-to / credit-history session and 2026-08-12 by the daily-vs-
+monthly measurement session.
 Rough order inside each section is by value-for-effort, not commitment.
 
 ## Shipped 2026-08-10
@@ -244,10 +245,52 @@ below the scrubber.
 
 ## Bigger / already planned
 
-### Daily nowcast layer
+### Daily nowcast layer — measured 2026-08-12, implementation on hold
 Planned in the README since 60b2237. New data cadence, new layer
 semantics, pipeline work with viz implications. Deserves its own
 session rather than a bullet here.
+
+Measured before building anything (`tmp/compare_daily_monthly.R`: June
+2026's 30 dailies from `terrascope-s5p-l3-no2-td-v2`, weight-weighted
+composite vs. the archived monthly, 2M-pixel regular sample):
+
+* **The monthly product is not the weighted mean of the published
+  dailies.** On eligible pixels (monthly ≥ 30 µmol/m²): bias −0.31,
+  median |rel| 1.31%, p95 9.1%, cor 0.978, ~0% bit-identical. The summed
+  daily weights don't reproduce the monthly weight raster either (median
+  3.7%, p95 20%), so the monthly is aggregated from L2 with its own
+  day/orbit assignment or QA pass, not from the daily files.
+* Not merely thin coverage: disagreement falls with monthly weight but
+  the best-observed quartile still sits at median 1.0% / p95 5.3%.
+  A minimum-weight gate on provisional values is validated anyway
+  (thinnest quartile: median 1.9% / p95 13.4%).
+* Coverage is asymmetric: the monthly holds 0.34% of pixels the daily
+  composite lacks, 20× the reverse — the monthly aggregation recovers a
+  fringe (twilight edge) the dailies don't carry.
+* Consequence: the pixel-level disagreement is the same size as the
+  1.2% credit margin, so the README rule (provisional values never touch
+  the panel; credits decided only at month close from the monthly) is
+  mandatory, not just conservative. For a *display* layer it's fine: as
+  1/12 of a provisional `m` even the p95 error damps to ~0.8%, and hex
+  means damp the random part further.
+* Grid is pixel-identical to the monthly (18000×8960 @ 0.02°, same
+  transform), so the script-02 lookup is reusable as-is. Same asset pair
+  (NO2 + NO2_WEIGHT), ~125 MB/day, publication lag a steady 2 days
+  (every August day so far), vs. month-close + 13 for the monthly.
+  July's 31 dailies were complete on Aug 2 — 11 days before the official
+  monthly.
+* One download gotcha for the future script: `download_terrascope`
+  treats `end_date` as exclusive — a range ending on the month's last
+  day fetches 29 of 30 files. Script 01 never sees this because it
+  always passes today's date.
+
+Design sketch agreed in discussion, deliberately not built yet:
+provisional `m` (11 closed months + month-to-date as the twelfth) as the
+one nowcast metric, badged provisional and replaced at month close;
+minimum-weight gate; res-3 only; shipped as a small daily sidecar plane
+(few hundred KB, `no-cache`) so the 2.7 GB bundle rebuild stays monthly.
+Staging in `tmp/daily_cmp/` (4.4 GB, composite cached) is safe to
+delete; the comparison script stays.
 
 ## Housekeeping
 
