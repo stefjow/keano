@@ -263,7 +263,7 @@ this layer matters.
 **maeshle** — pronounced *Mäschle*, the Vorarlberg diminutive of *Masche*,
 a little bow.
 
-In Austria you say *"Strom hat ka Mascherl"*: electricity wears no little
+In Vorarlberg you say *"Strom hot koa Mäschle"*: electricity wears no little
 bow. Once it is on the grid you cannot tell which power plant produced the
 kilowatt you just used — it carries no tag saying where it came from.
 
@@ -271,7 +271,7 @@ Air is the same, and that is this project's central difficulty. NO₂ lives
 only hours and travels tens of kilometres, so the air over any one 36 km²
 hexagon is mostly somebody else's. A cell can hit a record low because this
 year's wind moved the neighbour's plume, not because anyone reduced
-anything. *D'Luft hat ka Mascherl.*
+anything. *D'Luft hot o koa Mäschle.*
 
 So the project ties one on. Every hexagon gets a monthly score computed only
 from its own past, and the plume guard checks the wider neighbourhood before
