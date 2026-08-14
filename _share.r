@@ -1,5 +1,5 @@
 # ============================================================================
-# Shared utility functions for lufterl
+# Shared utility functions for maeshle
 # ============================================================================
 
 #' Load and install packages if needed

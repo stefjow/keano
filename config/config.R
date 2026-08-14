@@ -1,5 +1,5 @@
 # ============================================================================
-# lufterl configuration
+# maeshle configuration
 # ============================================================================
 # Design decisions behind these parameters are documented in README.md.
 # Rankings/composites are derived views; the panel and metric definitions
@@ -17,7 +17,7 @@ source("_share.r")
 #   * package.json + package-lock.json ("name")
 #   * the NO2_* env-var prefix (config keys; kept brand-neutral on purpose)
 #   * the git remotes / GitHub repo name / the working-copy directory
-PROJECT_NAME = "lufterl"
+PROJECT_NAME = "maeshle"
 
 # --- Paths ------------------------------------------------------------------
 # DATA_RAW and PUBLISH_DIR live on infrastructure outside this repo; set

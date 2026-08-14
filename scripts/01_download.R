@@ -4,7 +4,7 @@
 # data/raw is an APPEND-ONLY archive: we only request months newer than the
 # newest archived file and never overwrite or delete. This is what keeps the
 # scored history consistent over time (see README) — if Terrascope ever
-# reprocesses the product, lufterl keeps scoring from the archived vintage.
+# reprocesses the product, maeshle keeps scoring from the archived vintage.
 # ============================================================================
 
 source("config/config.R")

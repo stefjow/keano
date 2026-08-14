@@ -1,8 +1,8 @@
-# lufterl
+# maeshle
 
 **Global hexagonal NO₂ reduction panel and credit system.**
 
-lufterl tracks tropospheric NO₂ for every H3 hexagon on the planet and scores
+maeshle tracks tropospheric NO₂ for every H3 hexagon on the planet and scores
 each cell's short- and long-term reduction performance. Cells earn *credits*
 by undercutting their own historical minimum, which could serve as the basis
 for an incentive-driven system. Successor to the city-based
@@ -260,9 +260,29 @@ this layer matters.
 
 ## Name
 
-*Lüfterl* — Austrian German for a gentle breeze, a breath of fresh air —
-written ASCII as **lufterl** for repo, URL and package sanity. It keeps the
-meaning the project began with: the earlier name *keano* read as Hawaiian
-*ke anu*, "the cool breeze". The display name lives in one place,
-`PROJECT_NAME` in `config/config.R`, and is spliced into the web map at build
-time (the template writes `__NAME__` wherever the name should appear).
+**maeshle** — pronounced *Mäschle*, the Vorarlberg diminutive of *Masche*,
+a little bow.
+
+In Austria you say *"Strom hat ka Mascherl"*: electricity wears no little
+bow. Once it is on the grid you cannot tell which power plant produced the
+kilowatt you just used — it carries no tag saying where it came from.
+
+Air is the same, and that is this project's central difficulty. NO₂ lives
+only hours and travels tens of kilometres, so the air over any one 36 km²
+hexagon is mostly somebody else's. A cell can hit a record low because this
+year's wind moved the neighbour's plume, not because anyone reduced
+anything. *D'Luft hat ka Mascherl.*
+
+So the project ties one on. Every hexagon gets a monthly score computed only
+from its own past, and the plume guard checks the wider neighbourhood before
+paying credit, so a low that merely blew in from elsewhere is damped or
+refused. The result is a tag on air that arrived without one.
+
+The spelling keeps both halves: *Mäschle* transliterated `ae`, and **mesh**
+written the English way, for the H3 mesh the whole panel is built on — the
+grid that does the tagging. It reads as one word and stays ASCII for repo,
+URL and package sanity.
+
+The display name lives in one place, `PROJECT_NAME` in `config/config.R`,
+and is spliced into the web map at build time (the template writes
+`__NAME__` wherever the name should appear).
