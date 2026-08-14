@@ -4,7 +4,7 @@
 # data/raw is an APPEND-ONLY archive: we only request months newer than the
 # newest archived file and never overwrite or delete. This is what keeps the
 # scored history consistent over time (see README) — if Terrascope ever
-# reprocesses the product, keano keeps scoring from the archived vintage.
+# reprocesses the product, lufterl keeps scoring from the archived vintage.
 # ============================================================================
 
 source("config/config.R")
@@ -61,7 +61,7 @@ for (asset in list(c("NO2", "no2_monthly"), c("NO2_WEIGHT", "no2_weight"))) {
 # upstream says today, so drift stays visible until someone re-vintages on
 # purpose. On drift we stop: the archive stays authoritative (never
 # redownload), but nothing should publish until a human has looked.
-# KEANO_VINTAGE_ACK=1 acknowledges and continues.
+# NO2_VINTAGE_ACK=1 acknowledges and continues.
 VINTAGE_FILE = file.path(DATA_RAW, "vintage.csv")
 
 fld = function(x, k) { v = x[[k]]; if (is.null(v)) NA_character_ else as.character(v) }
@@ -193,8 +193,8 @@ if (is.null(upstream)) {
     message("The archived vintage stays authoritative — do NOT redownload.\n",
             "Decide whether to keep scoring it or re-vintage the history on\n",
             "purpose, then edit ", VINTAGE_FILE, " to match that decision.\n",
-            "KEANO_VINTAGE_ACK=1 acknowledges and continues this run.")
-    if (!nzchar(Sys.getenv("KEANO_VINTAGE_ACK")))
+            "NO2_VINTAGE_ACK=1 acknowledges and continues this run.")
+    if (!nzchar(Sys.getenv("NO2_VINTAGE_ACK")))
       stop("Vintage check failed: ", length(drift), " drift, ",
            length(integrity), " integrity.")
   } else {

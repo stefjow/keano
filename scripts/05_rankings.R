@@ -99,7 +99,7 @@ monthly = rbindlist(sum_list)[, .(
 # half the globe missing, a scale error, a corrupted tile — and it would
 # render into a perfectly functional map. Checked before anything is written,
 # so a rejected month leaves the previous rankings in place; the candidate
-# lands in TMP_DIR to be looked at. KEANO_SANITY_ACK=1 accepts and continues.
+# lands in TMP_DIR to be looked at. NO2_SANITY_ACK=1 accepts and continues.
 summary_file = file.path(DATA_RANKINGS, "monthly_summary.csv")
 previous = if (file.exists(summary_file))
   fread(summary_file, data.table = FALSE) else NULL
@@ -120,8 +120,8 @@ if (length(findings)) {
   message(bar)
   message("Nothing was written to ", DATA_RANKINGS, "; the previous rankings\n",
           "still stand. The rejected summary is at ", candidate, ".\n",
-          "KEANO_SANITY_ACK=1 accepts it and continues this run.")
-  if (!nzchar(Sys.getenv("KEANO_SANITY_ACK")))
+          "NO2_SANITY_ACK=1 accepts it and continues this run.")
+  if (!nzchar(Sys.getenv("NO2_SANITY_ACK")))
     stop("Sanity gate failed: ", length(findings), " finding(s).")
 } else {
   message("Sanity gate: ", nrow(monthly), " months clean (newest ",

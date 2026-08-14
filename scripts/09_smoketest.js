@@ -32,7 +32,7 @@ const os = require("os");
 const path = require("path");
 const puppeteer = require("puppeteer-core");
 
-const WEB_DIR = process.env.KEANO_WEB_DIR ||
+const WEB_DIR = process.env.NO2_WEB_DIR ||
                 path.join(__dirname, "..", "data", "viz", "web");
 const HOVER_FLAG = "--blink-settings=primaryHoverType=2,availableHoverTypes=2," +
                    "primaryPointerType=4,availablePointerTypes=4";
@@ -110,7 +110,7 @@ async function newPage(browser, url) {
   // loading overlay removes itself once data + map are up; then wait for idle
   await page.waitForFunction("!document.getElementById('loading')", { timeout: 60000 });
   await page.evaluate(() => new Promise(r => {
-    const m = window._keanoMap;
+    const m = window._appMap;
     m.loaded() && !m.isMoving() ? r() : m.once("idle", r);
   }));
   return { page, errors, dataReqs };
@@ -121,7 +121,7 @@ async function newPage(browser, url) {
    and return its id + page pixel coordinates. */
 function pickHex(page) {
   return page.evaluate(() => {
-    const map = window._keanoMap;
+    const map = window._appMap;
     const rect = map.getContainer().getBoundingClientRect();
     const cx = rect.width * 0.6, cy = rect.height * 0.4;
     let best = null;
@@ -200,7 +200,7 @@ async function desktopRun(browser, base) {
   // zoomed in, the region chart must gain the hovered hex's own series line
   // (fetched per hex via HTTP range requests) next to the res-3 region line
   const fine = await page.evaluate(id => new Promise(res => {
-    const map = window._keanoMap;
+    const map = window._appMap;
     const [la, lo] = h3.cellToLatLng(id);
     map.jumpTo({ center: [lo, la], zoom: 9.4 });
     const t0 = Date.now();
@@ -254,8 +254,8 @@ async function desktopRun(browser, base) {
   // viewport deep link: #layer/@lat,lng,z restores the view; panning writes it back
   const vw = await newPage(browser, base + "#yoy/@40.400,-3.700,6.50");
   const got = await vw.page.evaluate(() => {
-    const c = window._keanoMap.getCenter();
-    return { lat: c.lat, lng: c.lng, zoom: window._keanoMap.getZoom(),
+    const c = window._appMap.getCenter();
+    return { lat: c.lat, lng: c.lng, zoom: window._appMap.getZoom(),
              /* the deep link carries the horizon, so both rows must reflect it */
              layer: activeLayer,
              group: [...document.querySelectorAll("#layer-buttons button")]
@@ -268,8 +268,8 @@ async function desktopRun(browser, base) {
      got.layer === "yoy" && got.group === "Change" && got.sub === "last year",
      "viewport deep link restores layer + view (" + got.group + "/" + got.sub + ")");
   await vw.page.evaluate(() => new Promise(r => {
-    window._keanoMap.once("moveend", r);
-    window._keanoMap.panBy([120, 0], { duration: 0 });
+    window._appMap.once("moveend", r);
+    window._appMap.panBy([120, 0], { duration: 0 });
   }));
   const hash = await vw.page.evaluate(() => location.hash);
   ok(/^#yoy\/@-?\d+\.\d+,-?\d+\.\d+,\d+\.\d+$/.test(hash),
@@ -322,7 +322,7 @@ const topState = page => page.evaluate(() => {
   const ser = ec ? (ec.getOption().series || []) : [];
   const paid = ser.find(s => s.name === "credit paid");
   return {
-    res: displayRes(), zoom: window._keanoMap.getZoom(),
+    res: displayRes(), zoom: window._appMap.getZoom(),
     title: document.getElementById("top-title").textContent,
     note: document.getElementById("top-note").textContent,
     rows: document.querySelectorAll("#top-table button.loc").length,
@@ -367,8 +367,8 @@ const clickPage = (page, i) =>
 
 async function zoomTo(page, zoom) {
   await page.evaluate(z => new Promise(r => {
-    window._keanoMap.once("moveend", r);
-    window._keanoMap.setZoom(z);
+    window._appMap.once("moveend", r);
+    window._appMap.setZoom(z);
   }), zoom);
   await settleTop(page);
 }
@@ -382,7 +382,7 @@ async function flyFirstRow(page) {
     { timeout: 5000 }).catch(() => {});
   await page.evaluate(() => document.querySelector("#top-table button.loc").click());
   await page.waitForFunction(
-    () => !window._keanoMap.isMoving() &&
+    () => !window._appMap.isMoving() &&
           document.getElementById("region-panel").classList.contains("pinned") &&
           document.getElementById("rp-cred").textContent !== "",
     { timeout: 20000 }).catch(() => {});

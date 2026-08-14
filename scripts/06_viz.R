@@ -470,10 +470,11 @@ meta = list(
 # Splice instead of sub(): the replacement strings are huge and sub() would
 # interpret backslashes/backreferences in them.
 html = paste(readLines("viz/template.html", encoding = "UTF-8"), collapse = "\n")
+html = gsub("__NAME__", PROJECT_NAME, html, fixed = TRUE)  # brand name: single source of truth (config.R)
 splice = function(meta_list, bin_b64, out_file) {
-  a = strsplit(html, "__KEANO_META__", fixed = TRUE)[[1]]
+  a = strsplit(html, "__META__", fixed = TRUE)[[1]]
   stopifnot(length(a) == 2)
-  b = strsplit(a[2], "__KEANO_BIN__", fixed = TRUE)[[1]]
+  b = strsplit(a[2], "__BIN__", fixed = TRUE)[[1]]
   stopifnot(length(b) == 2)
   json = toJSON(meta_list, auto_unbox = TRUE, digits = NA)
   writeLines(paste0(a[1], json, b[1], bin_b64, b[2]), out_file, useBytes = TRUE)

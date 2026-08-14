@@ -1,7 +1,7 @@
 {
-  "name": "keano",
+  "name": "lufterl",
   "private": true,
-  "description": "dev tooling for the keano web map — scripts/09_smoketest.js",
+  "description": "dev tooling for the lufterl web map — scripts/09_smoketest.js",
   "devDependencies": {
     "puppeteer-core": "^24.0.0"
   }

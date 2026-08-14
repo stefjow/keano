@@ -1,5 +1,5 @@
 # ============================================================================
-# Shared utility functions for keano
+# Shared utility functions for lufterl
 # ============================================================================
 
 #' Load and install packages if needed

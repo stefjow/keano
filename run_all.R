@@ -1,5 +1,5 @@
 # ============================================================================
-# keano: full pipeline
+# lufterl: full pipeline
 # ============================================================================
 # Incremental by design — safe to rerun after each new monthly release:
 # 01 downloads only missing months, 03 aggregates only missing months,

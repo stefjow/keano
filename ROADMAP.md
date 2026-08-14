@@ -86,7 +86,7 @@ Cost, stated plainly: credit volume is 13% of what it was, 42% of the
 top-1000 cells reshuffle, and the same or slightly more cells earn. The
 switch tripped the script-05 sanity gate exactly as designed — `n_records`
 and `total_credit` changed on 86 closed months, nothing else — and was
-accepted once with `KEANO_SANITY_ACK=1`. That is the intended shape of a
+accepted once with `NO2_SANITY_ACK=1`. That is the intended shape of a
 deliberate re-vintage.
 
 ### Credit-payout markers in the trend chart
@@ -139,9 +139,9 @@ lists, no tags, no other branches, and the only content unique to the Gitea
 line was the real paths, which now live outside the repo.
 
 ### Out-of-repo config and hosting documented
-A fresh clone of the public repo used to hit `KEANO_DATA_RAW is not set`
+A fresh clone of the public repo used to hit `NO2_DATA_RAW is not set`
 with nothing in the README to explain it. Scripts 01–03 need
-`KEANO_DATA_RAW`, 07 needs `KEANO_PUBLISH_DIR`, 04–06 need neither. The
+`NO2_DATA_RAW`, 07 needs `NO2_PUBLISH_DIR`, 04–06 need neither. The
 deploy header documented nginx while the reference host actually runs Caddy;
 both configs are given now.
 
@@ -317,7 +317,7 @@ the tier the list follows and where `→` lands.
 
 * Gates halt, they do not merely warn. The vintage check (01) and the sanity
   gate (05) both `stop()`, so `run_all.R` exits non-zero and nothing
-  downstream publishes; `KEANO_VINTAGE_ACK=1` and `KEANO_SANITY_ACK=1`
+  downstream publishes; `NO2_VINTAGE_ACK=1` and `NO2_SANITY_ACK=1`
   acknowledge. Deliberate — keeping an old vintage or rebasing the history
   is a decision for a person, not for a timer.
 * Sanity thresholds are measured, not guessed; `sanity_findings()` in

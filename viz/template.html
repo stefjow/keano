@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>keano — global NO₂ hexagon map</title>
+<title>__NAME__ — global NO₂ hexagon map</title>
 <!-- inline data URI: works for the single-file share too, and stops the
      browser's default /favicon.ico request (which 404s on the live host) -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='13' fill='%230a1014'/%3E%3Cpath d='M32 9.5 51.5 20.75v22.5L32 54.5 12.5 43.25v-22.5Z' fill='none' stroke='%234fd6c2' stroke-width='5.5' stroke-linejoin='round'/%3E%3C/svg%3E">
@@ -441,7 +441,7 @@
 <body>
 
 <header>
-  <div class="wordmark"><b>keano</b><span>global NO₂ · H3 reduction panel</span></div>
+  <div class="wordmark"><b>__NAME__</b><span>global NO₂ · H3 reduction panel</span></div>
   <span class="month-chip" id="month-chip"></span>
   <button id="about-link">about</button>
 </header>
@@ -449,26 +449,26 @@
 <div id="about" hidden>
   <div class="about-card">
     <div class="about-head">
-      <h2>About keano</h2>
+      <h2>About __NAME__</h2>
       <button id="about-close" aria-label="Close about">×</button>
     </div>
     <div class="about-body">
       <h3>What it measures</h3>
-      <p>keano measures the NO₂ pollution in each hexagon of approximately
-      36 km² on Earth. Each month since May 2018, keano gives each hexagon
+      <p>__NAME__ measures the NO₂ pollution in each hexagon of approximately
+      36 km² on Earth. Each month since May 2018, __NAME__ gives each hexagon
       a score for its decrease in pollution. Most NO₂ comes from
       combustion. Thus NO₂ is a good indication of local air pollution.</p>
 
       <h3>The data</h3>
       <p>The data source is monthly global NO₂ from the Sentinel-5P/TROPOMI
-      satellite (Terrascope L3, 0.02° grid, quality-filtered). keano
+      satellite (Terrascope L3, 0.02° grid, quality-filtered). __NAME__
       calculates the average of this data in each H3 resolution-6 hexagon,
       with weights for coverage. The values are tropospheric column
       densities in µmol/m². A value includes all the NO₂ in the air above a
       hexagon. The values are not surface concentrations.</p>
 
       <h3>The base series: m</h3>
-      <p>keano calculates all its scores from <b>m</b>. m is the average
+      <p>__NAME__ calculates all its scores from <b>m</b>. m is the average
       NO₂ for the last 12 months. A 12-month window removes the seasonal
       cycle and decreases the measurement noise. m uses only the months
       before the current month. Thus a new month does not change the values
@@ -477,7 +477,7 @@
       latitudes. A 12-month average without the usual peak months of a cell
       is too low, because it is an average of the low months only. When the
       unobserved months usually hold a large part of the cell's annual NO₂,
-      keano shows no value for m.</p>
+      __NAME__ shows no value for m.</p>
 
       <h3>The layers</h3>
       <p>The <b>Change</b> layer shows the speed at which m changes. There
@@ -508,19 +508,19 @@
       axis.</p>
 
       <h3>Credits</h3>
-      <p>keano gives credit to a cell when m goes below the record minimum
+      <p>__NAME__ gives credit to a cell when m goes below the record minimum
       of that cell. The baseline B is the lowest m of the cell in the last
       five years. This period includes the last month. m must go below B by
       more than a noise margin of 1.2%. The credit is the relative decrease
       (B − m)/B. Thus a clean cell and a dirty cell receive the same credit
-      for the same percentage decrease. keano removes records after five
+      for the same percentage decrease. __NAME__ removes records after five
       years. Thus each cell can receive credit again after some time.</p>
       <p>The baseline includes the last month. Thus a cell must go below
       its own best value again to receive more credit. Each step down
       receives credit one time. For the full record of a cell, the total
       credit is approximately log(first m ÷ latest m). The speed of the
       decrease does not change this total.</p>
-      <p>A step smaller than the margin is not lost. keano measures the
+      <p>A step smaller than the margin is not lost. __NAME__ measures the
       decrease from the level at which the cell last received credit. Thus
       small decreases collect until their sum is more than the margin. A
       month that the neighbourhood check (below) sets to zero collects the
@@ -529,12 +529,12 @@
       receive scores, because percent changes have no meaning at the
       background noise level. NO₂ moves tens of kilometres. A record
       minimum can occur because the plume of an adjacent cell went to a
-      different area for one year. Thus keano gives the full credit only
+      different area for one year. Thus __NAME__ gives the full credit only
       when the region of approximately 1,770 km² around the cell is also
-      below its own baseline. keano sets these isolated, improbable records
+      below its own baseline. __NAME__ sets these isolated, improbable records
       to zero. And a record must come from a window that saw the cell's
       usual peak months: a low average over the low months only is not a
-      low level. A record from such a window is banked, and keano pays it
+      low level. A record from such a window is banked, and __NAME__ pays it
       when the coverage returns.</p>
       <p>On the Credit layer, the hover chart shows a bar for each month in
       which the hexagon received credit. A taller bar shows more credit.
@@ -614,8 +614,8 @@
 
 <footer id="stats"></footer>
 
-<script id="keano-meta" type="application/json">__KEANO_META__</script>
-<script id="keano-bin" type="text/plain">__KEANO_BIN__</script>
+<script id="app-meta" type="application/json">__META__</script>
+<script id="app-bin" type="text/plain">__BIN__</script>
 <script>
 "use strict";
 (function () {
@@ -632,7 +632,7 @@
   }
 })();
 
-const META = JSON.parse(document.getElementById("keano-meta").textContent);
+const META = JSON.parse(document.getElementById("app-meta").textContent);
 const S = META.scales;
 const NM = META.months.length;
 const NP = META.nP;
@@ -644,7 +644,7 @@ const FEAT_CAP = 60000;   // uniform-stride thinning beyond this, never truncati
 
 /* --- Data layer ------------------------------------------------------------- */
 /* Two builds from one template:
-   - single-file (network share): one zlib blob base64-embedded (#keano-bin),
+   - single-file (network share): one zlib blob base64-embedded (#app-bin),
      inflated via DecompressionStream; everything resident.
    - web (META.web set): small binaries fetched on demand — core (res-3) up
      front; series, t4, t5 lazily; res-6 planes chunked by res-1 parent.
@@ -657,7 +657,7 @@ function b64bytes(b64) {
   return a;
 }
 async function inflateContainer() {
-  const el = document.getElementById("keano-bin");
+  const el = document.getElementById("app-bin");
   const packed = b64bytes(el.textContent.trim());
   el.remove();
   const format = packed[0] === 0x1f && packed[1] === 0x8b ? "gzip" : "deflate";
@@ -1069,7 +1069,7 @@ const PALETTES = {
   }
 };
 let themeName = (() => {
-  try { return localStorage.getItem("keano-theme") === "light" ? "light" : "dark"; }
+  try { return localStorage.getItem("app-theme") === "light" ? "light" : "dark"; }
   catch (e) { return "dark"; }
 })();
 document.documentElement.dataset.theme = themeName;
@@ -1079,7 +1079,7 @@ const cartoTiles = kind => ["a", "b", "c", "d"].map(s =>
 function applyTheme(name) {
   themeName = name;
   document.documentElement.dataset.theme = name;
-  try { localStorage.setItem("keano-theme", name); } catch (e) {}
+  try { localStorage.setItem("app-theme", name); } catch (e) {}
   ctrlTheme.sync();
   const paintMap = () => {
     map.getSource("basemap").setTiles(cartoTiles("nolabels"));
@@ -1356,7 +1356,7 @@ const ctrl3d = {
   onRemove() {}
 };
 map.addControl(new maplibregl.AttributionControl({ compact: true }));
-window._keanoMap = map;   // console/test access
+window._appMap = map;   // console/test access
 
 const EMPTY = { type: "FeatureCollection", features: [] };
 function displayRes() {

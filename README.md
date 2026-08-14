@@ -1,8 +1,8 @@
-# keano
+# lufterl
 
 **Global hexagonal NO₂ reduction panel and credit system.**
 
-keano tracks tropospheric NO₂ for every H3 hexagon on the planet and scores
+lufterl tracks tropospheric NO₂ for every H3 hexagon on the planet and scores
 each cell's short- and long-term reduction performance. Cells earn *credits*
 by undercutting their own historical minimum, which could serve as the basis
 for an incentive-driven system. Successor to the city-based
@@ -48,7 +48,7 @@ rows; closed months never change. Three rules keep that true:
    redownloaded; the choice between keeping the old vintage and rebasing
    the history needs a human decision. The same manifest catches a
    truncated or corrupted archive file, by checking the recorded size
-   against the bytes on disk. `KEANO_VINTAGE_ACK=1` acknowledges and
+   against the bytes on disk. `NO2_VINTAGE_ACK=1` acknowledges and
    continues.
 
 ## Pipeline
@@ -91,8 +91,8 @@ control. R reads `.Renviron` in the repo root (gitignored) at startup:
 ```
 TERRASCOPE_USER=...       # Terrascope account, used by terrascoper (script 01)
 TERRASCOPE_PASS=...
-KEANO_DATA_RAW=...        # append-only GeoTIFF archive       (scripts 01-03)
-KEANO_PUBLISH_DIR=...     # published derived views           (script 07)
+NO2_DATA_RAW=...        # append-only GeoTIFF archive       (scripts 01-03)
+NO2_PUBLISH_DIR=...     # published derived views           (script 07)
 ```
 
 `config/config.R` binds the two paths lazily, so a missing one is an error
@@ -216,7 +216,7 @@ One template, two builds:
   planes rebuilds from the panel.
 
 Both `run_all.R` and the deploy script gate on `scripts/09_smoketest.js`: it
-serves `data/viz/web/` locally (`KEANO_WEB_DIR` overrides the bundle path)
+serves `data/viz/web/` locally (`NO2_WEB_DIR` overrides the bundle path)
 and drives it in headless Chrome (hover / pin / release, hex and viewport
 deep links, chart instances, the per-hex trend line joining the region line
 at fine zoom, zero page errors), once with a hover-capable pointer and once
@@ -238,7 +238,7 @@ an unusual month still passes while a broken one is caught. The same check re-ve
 rule 2 above: every closed month must come back unchanged from the
 recompute. On failure nothing is written, the previous rankings stand, the
 rejected summary lands in `tmp/monthly_summary_rejected.csv`, and
-`KEANO_SANITY_ACK=1` accepts it. Thresholds are in `config/config.R`.
+`NO2_SANITY_ACK=1` accepts it. Thresholds are in `config/config.R`.
 
 ## Planned: daily nowcast layer
 
@@ -260,5 +260,9 @@ this layer matters.
 
 ## Name
 
-*ke anu* (Hawaiian) ≈ "the coolness / the cool breeze". Also readable as
-**kea** + **NO**: a mountain parrot and the molecule family we track.
+*Lüfterl* — Austrian German for a gentle breeze, a breath of fresh air —
+written ASCII as **lufterl** for repo, URL and package sanity. It keeps the
+meaning the project began with: the earlier name *keano* read as Hawaiian
+*ke anu*, "the cool breeze". The display name lives in one place,
+`PROJECT_NAME` in `config/config.R`, and is spliced into the web map at build
+time (the template writes `__NAME__` wherever the name should appear).

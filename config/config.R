@@ -1,5 +1,5 @@
 # ============================================================================
-# keano configuration
+# lufterl configuration
 # ============================================================================
 # Design decisions behind these parameters are documented in README.md.
 # Rankings/composites are derived views; the panel and metric definitions
@@ -8,23 +8,34 @@
 
 source("_share.r")
 
+# --- Identity ---------------------------------------------------------------
+# Single source of truth for the display name. Script 06 splices PROJECT_NAME
+# into viz/template.html wherever the template prints __NAME__ (title,
+# wordmark, About text), so a rebrand is one line here + a viz rebuild.
+# NOT auto-propagated — grep and edit these too when renaming:
+#   * prose in README.md / ROADMAP.md / notes/ and this file's comments
+#   * package.json + package-lock.json ("name")
+#   * the NO2_* env-var prefix (config keys; kept brand-neutral on purpose)
+#   * the git remotes / GitHub repo name / the working-copy directory
+PROJECT_NAME = "lufterl"
+
 # --- Paths ------------------------------------------------------------------
 # DATA_RAW and PUBLISH_DIR live on infrastructure outside this repo; set
-# KEANO_DATA_RAW / KEANO_PUBLISH_DIR in .Renviron (gitignored). Lazy so
+# NO2_DATA_RAW / NO2_PUBLISH_DIR in .Renviron (gitignored). Lazy so
 # scripts that don't touch the share (04-06) run without them.
 env_path = function(var) {
   val = Sys.getenv(var)
   if (!nzchar(val)) stop(var, " is not set — add it to .Renviron")
   val
 }
-delayedAssign("DATA_RAW", env_path("KEANO_DATA_RAW"))  # append-only archive of monthly global GeoTIFFs (network share)
+delayedAssign("DATA_RAW", env_path("NO2_DATA_RAW"))  # append-only archive of monthly global GeoTIFFs (network share)
 DATA_CACHE    = "data/raw_cache" # local staging copy for compute (safe to delete)
 DATA_LOOKUP   = "data/lookup"    # one-time pixel -> H3 lookup + cell table
 DATA_PANEL    = "data/panel"     # hive parquet: month=YYYY-MM/shard=<h3res0>
 DATA_METRICS  = "data/metrics"   # hive parquet: shard=<h3res0>
 DATA_RANKINGS = "data/rankings"  # derived views (CSV)
 DATA_VIZ      = "data/viz"       # self-contained HTML map (derived view)
-delayedAssign("PUBLISH_DIR", env_path("KEANO_PUBLISH_DIR"))  # published views (network share)
+delayedAssign("PUBLISH_DIR", env_path("NO2_PUBLISH_DIR"))  # published views (network share)
 TMP_DIR       = "tmp"            # diagnostics, previews
 
 # --- Data source ------------------------------------------------------------
