@@ -156,77 +156,72 @@ reference.
 ## Derived views
 
 Rankings and composites are **derived views**: they can be redefined at any
-time without touching the stored panel or metric history. So is the map;
-script 06 renders it (MapLibre + h3-js, dark basemap) with res-3 hexagons
-globally, each carrying its full monthly `m` series as a mouse-over trend
-panel, plus full-coverage res-4/5/6 tiers as you zoom in (~0.3M /
-1.8M / 12.4M cells). Three primary layers, two of which pick a horizon:
-**Change** (overall / 5-year / last-year rate), **Credit** (latest month /
-trailing 12 months / all time) and **NO₂** (the current level). The horizon is
-part of the layer key, so it round-trips through the deep-link hash
+time without touching the stored panel or metric history. So is the map. It
+shows res-3 hexagons globally, each carrying its full monthly `m` series as a
+mouse-over trend panel, plus full-coverage res-4/5/6 tiers as you zoom in
+(~0.3M / 1.8M / 12.4M cells). Three primary layers, two of which pick a
+horizon: **Change** (overall / 5-year / last-year rate), **Credit** (latest
+month / trailing 12 months / all time) and **NO₂** (the current level). The
+horizon is part of the layer key, so it round-trips through the deep-link hash
 (`#trend5`, `#credit12`, …) and the Credit horizon drives the top-regions list
-too, so map and table can never disagree about which window is on screen.
+too, so map and table can never disagree about which window is on screen. The
+trend panel's chart follows the selected layer: NO₂ draws `m` itself, Change
+its change against a year earlier, and Credit **which months the hovered hex
+was actually paid in**, and how much, as bars.
 
-No per-cell ids, coordinates or geometry are shipped: each tier is
-a per-res-3-parent occupancy bitmap plus delta-encoded quantized metric
-planes, and the browser reconstructs H3 ids and hexagon outlines for the
-current viewport only.
+### The app lives in lufterl-map
 
-The trend panel's chart follows the selected layer: NO₂ draws `m` itself,
-Change its change against a year earlier, and Credit **which months the
-hovered hex was actually paid in**, and how much, as bars — with the count
-and the peak in figures under the chart and the exact month value on hover.
-98%+ of hex-months earn nothing, so the payout history ships as events rather
-than as a per-month plane: one `(month, level)` byte pair per payout. res-3 events are a flat sorted key list in `series.bin` (both
-builds); res-4/5/6 events live in `c<r>.bin` and are addressed by a per-cell
-count plane carried inside the tier's own gzipped planes; the client
-prefix-sums it, so no offset table is stored or shipped. That keeps the whole
-feature under 1% of the bundle. The finer tiers are web-only, like the
-per-hex `m` series they accompany; in the single-file build a hex below res 3
-shows its region's payouts, marked `(region)`.
+The web app itself (MapLibre + h3-js + ECharts, all bundled — the basemap
+tiles are its only external reference) is developed, tested and released in
+the **lufterl-map** repo. This pipeline consumes it as three committed files:
+`viz/template.html` (the app shell, with `__NAME__`/`__META__`/`__BIN__`
+placeholders script 06 splices), `scripts/09_smoketest.js` and
+`viz/VIZ_VERSION`. Refresh them with `scripts/update_viz.sh` (builds a
+sibling checkout, default `../lufterl-map`, override `LUFTERL_MAP_DIR`), then
+rerun script 06 and commit all three together.
+
+Script 06 is the format's **producer**: no per-cell ids, coordinates or
+geometry are shipped — each tier is a per-res-3-parent occupancy bitmap plus
+delta-encoded quantized metric planes, credit history ships as sparse events,
+and the browser reconstructs H3 ids and hexagon outlines for the current
+viewport only. Every byte of that contract (sections, quantization, META with
+its `fmt` version field, the mirrored H3 id arithmetic, host requirements) is
+specified in **lufterl-map/FORMAT.md**; keep the two sides in lockstep.
 
 One template, two builds:
 
 * **`data/viz/index.html`** — single file, everything zlib-compressed and
-  base64-embedded (~47 MB). For the network share, where no HTTP server
-  exists; open it straight from the filesystem.
-* **`data/viz/web/`** — for public hosting. A small app shell plus binary
-  files fetched on demand (res-3 core ~1.4 MB up front; monthly series,
-  res-4/5 tiers lazily; res-6 planes chunked by res-1 parent, ~50 KB per
-  chunk, viewport-driven). Every `.bin` has a precompressed `.gz` sibling
-  the host serves directly (`gzip_static` on nginx, `precompressed gzip` on
-  Caddy); `data/<month>/` paths carry far-future
-  `immutable` cache headers, while `index.html` stays `no-cache`. The directory
-  is named by month rather than by content, so rebuilding a month that has
-  already shipped serves changed bytes at an unchanged URL. That bit once,
-  when new planes were added to a deployed `2026-06` and returning browsers kept
-  reading the previous layout out of cache. Every data URL therefore carries
-  `?v=<build>` from `META.build`; `index.html` is always fresh and supplies the
-  current one, so a rebuild is a new URL. Paths are untouched, so the retention
-  glob and the deploy pruning are unaffected. The per-hex series and credit
-  files (`s4/s5/s6.bin`, `c4/c5/c6.bin`) are read with HTTP range requests,
-  so the host has to answer 206. They are also the only `.bin`s without a
-  `.gz` sibling, since a range into a precompressed file is meaningless.
-  Deploy with `scripts/08_deploy.sh` (config for both servers
-  in its header; the reference deployment runs Caddy). Only the newest month
-  is ever referenced, so build and deploy each keep the newest few bundles
+  base64-embedded (~65 MB). For the network share, where no HTTP server
+  exists; open it straight from the filesystem. (No per-hex series or
+  fine-tier payout events in this build; a hex below res 3 shows its region's
+  payouts, marked `(region)`.)
+* **`data/viz/web/`** — for public hosting. The app shell plus binary files
+  fetched on demand (res-3 core up front; series and res-4/5 tiers lazily;
+  res-6 planes chunked by res-1 parent, viewport-driven; per-hex series and
+  payout events via HTTP range requests). The host must answer 206, serve the
+  precompressed `.gz` siblings, and cache `data/<month>/` as immutable with
+  `index.html` no-cache — requirements and the `?v=<build>` versioning story
+  are in FORMAT.md, reference Caddy/nginx configs in `scripts/08_deploy.sh`'s
+  header. Deploy with `scripts/08_deploy.sh`. Only the newest month is ever
+  referenced, so build and deploy each keep the newest few bundles
   (`VIZ_KEEP_MONTHS` / `KEEP_MONTHS`, default 2 — the second for rollback)
   and drop the rest: ~96% of a bundle is the per-hex series that every build
   reships for the full history, and the remaining ~108 MB of month-specific
   planes rebuilds from the panel.
 
-Both `run_all.R` and the deploy script gate on `scripts/09_smoketest.js`: it
-serves `data/viz/web/` locally (`NO2_WEB_DIR` overrides the bundle path)
-and drives it in headless Chrome (hover / pin / release, hex and viewport
-deep links, chart instances, the per-hex trend line joining the region line
-at fine zoom, zero page errors), once with a hover-capable pointer and once
-as a touch device. A third run walks the top-regions panel: all three credit
-windows, and at every tier the map draws (res 3/4/5/6) that the list follows
-that tier, that `→` flies to a hex of *that* resolution instead of dropping
-back to res-3, and that the hex's credit-payout markers are drawn and agree
-with the summary line.
-Needs `npm install` (puppeteer-core) and a Chrome under `~/.cache/puppeteer`
-or `PUPPETEER_EXECUTABLE_PATH`; `SKIP_SMOKE=1` bypasses the deploy gate.
+Both `run_all.R` and the deploy script gate on `scripts/09_smoketest.js` (the
+vendored lufterl-map smoke test): it serves `data/viz/web/` locally
+(`NO2_WEB_DIR` overrides) and drives it in headless Chrome — four runs
+(desktop hover, layer control, top regions, touch), ~140 assertions;
+`NO2_OFFLINE=1` additionally refuses all DNS to prove the page needs nothing
+beyond its host and the tiles. Needs `npm install` (puppeteer-core) and a
+Chrome under `~/.cache/puppeteer` or `PUPPETEER_EXECUTABLE_PATH`;
+`SKIP_SMOKE=1` bypasses the deploy gate.
+
+For lufterl-map's own CI, script 06 has a fixture mode: `NO2_VIZ_SHARDS`
+(comma-separated res-0 shards) restricts the build and `NO2_VIZ_OUT`
+redirects the output, producing a small but complete-format bundle — that is
+how `lufterl-map/fixtures/web/` is regenerated.
 
 Script 05 gates the numbers, as the smoke test gates the map. A wrong month
 renders into a perfectly working map, so passing one proves nothing about the

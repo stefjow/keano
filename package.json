@@ -1,7 +1,7 @@
 {
   "name": "lufterl",
   "private": true,
-  "description": "dev tooling for the lufterl web map — scripts/09_smoketest.js",
+  "description": "runs the vendored lufterl-map smoke test (scripts/09_smoketest.js) as the pipeline's viz gate",
   "devDependencies": {
     "puppeteer-core": "^24.0.0"
   }

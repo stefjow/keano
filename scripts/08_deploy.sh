@@ -20,7 +20,9 @@
 #
 # The host must serve the .gz siblings in place of the .bin files, answer
 # range requests (the per-hex series files are read with Range: bytes=),
-# cache data/ far-future and index.html not at all.
+# cache data/ far-future and index.html not at all. These requirements are
+# part of the bundle format contract — see lufterl-map/FORMAT.md §Host
+# requirements; the blocks below are its reference implementations.
 #
 # Caddy — what the reference deployment runs:
 #

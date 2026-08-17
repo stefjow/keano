@@ -1,8 +1,9 @@
 # ============================================================================
 # Step 6: Interactive H3 hexagon map (MapLibre), res 3 -> 6
 # ============================================================================
-# Renders data/viz/index.html — a single self-contained HTML file (MapLibre GL
-# + h3-js from CDN, dark basemap tiles; all hexagon data embedded):
+# Renders data/viz/index.html — a single self-contained HTML file (MapLibre
+# GL, h3-js and ECharts bundled into the vendored app shell, basemap tiles the
+# only external reference; all hexagon data embedded):
 #
 #   * res-3 hexagons globally (~41k): current metrics + the full monthly
 #     m series per hexagon, shown as a small trend chart on mouse-over
@@ -22,10 +23,20 @@
 # `credit`, so everything downstream (planes, scales, top lists, payout
 # markers) is the shipped rule with no further branching. The retired v1-v3
 # columns stay in the metrics as an audit trail and are never read here.
+#
+# The app itself lives in the lufterl-map repo; viz/template.html here is its
+# vendored build artifact (refresh with scripts/update_viz.sh). Everything
+# this script encodes — sections, quantization, META, the mirrored H3 id
+# arithmetic — is specified in lufterl-map/FORMAT.md; keep the two in lockstep.
 # ============================================================================
 
 source("config/config.R")
 loadPackages(c("data.table", "arrow", "dplyr", "parallel", "h3jsr", "jsonlite"))
+
+# Fixture mode (lufterl-map dev/CI): NO2_VIZ_SHARDS restricts the build to a
+# comma-separated list of res-0 shards and NO2_VIZ_OUT redirects the output,
+# producing a small but complete-format bundle without touching data/viz.
+if (nzchar(Sys.getenv("NO2_VIZ_OUT"))) DATA_VIZ = Sys.getenv("NO2_VIZ_OUT")
 
 ensure_dir(DATA_VIZ)
 
@@ -84,6 +95,13 @@ rm(smp, pth)
 shards = sort(sub("^shard=", "",
                   grep("^shard=", list.dirs(DATA_METRICS, recursive = FALSE,
                                             full.names = FALSE), value = TRUE)))
+if (nzchar(Sys.getenv("NO2_VIZ_SHARDS"))) {
+  keep = strsplit(Sys.getenv("NO2_VIZ_SHARDS"), ",", fixed = TRUE)[[1]]
+  stopifnot(all(keep %in% shards))
+  shards = sort(keep)
+  message("Fixture mode: ", length(shards), " shard(s): ",
+          paste(shards, collapse = ", "))
+}
 
 # --- Per shard: res-3 series + res-3 latest metrics + all res-6 cells ---------
 # A res-3 cell lies entirely within one res-0 shard (H3 truncation is
@@ -433,6 +451,11 @@ stats = as.list(monthly[month == latest,
 
 # --- Assemble --------------------------------------------------------------------
 meta = list(
+  # Bundle format version — the contract with the lufterl-map client, spelled
+  # out in that repo's FORMAT.md. The client refuses any other value (absent
+  # means 1: v1 bundles predate the field). Bump on any change that would make
+  # an old app misread a new bundle or vice versa.
+  fmt = 1L,
   month = latest,
   generated = format(Sys.time(), "%Y-%m-%d %H:%M"),
   # Cache key for every data URL. data/<month>/ is named by month, not by

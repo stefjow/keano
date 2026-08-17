@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+// GENERATED — built from lufterl-map v1.0.0 (2026-08-17). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
 /* ============================================================================
- * Step 9 (gate): Smoke test of the built web bundle
+ * Smoke test of the built web bundle (lufterl-map)
  * ============================================================================
- * Serves data/viz/web/ locally and drives it in headless Chrome. Guards the
+ * Serves a web bundle locally and drives it in headless Chrome. Guards the
  * regressions we actually shipped fixes for: page-level JS crashes (ECharts),
  * deep links arriving at a zoom where the hex renders, and the region panel
  * resizing when the pin chip disappears.
@@ -19,10 +20,12 @@
  *                 heading pager (10 rows × 10 pages, ranks running on);
  *   touch       — default headless (hover:none): tap pins, × dismisses.
  *
- * Needs: npm install (puppeteer-core), a Chrome under ~/.cache/puppeteer
- * (or PUPPETEER_EXECUTABLE_PATH), and internet for the CDN map libraries.
- * Run it after 06_viz.R; 08_deploy.sh runs it as a deploy gate (SKIP_SMOKE=1
- * to bypass). Exit code 0 = green.
+ * Needs: npm install (puppeteer-core) and a Chrome under ~/.cache/puppeteer
+ * (or PUPPETEER_EXECUTABLE_PATH). The map libraries are bundled into the app,
+ * so no internet is required beyond the basemap tiles (whose absence the app
+ * tolerates). Bundle dir: NO2_WEB_DIR, else .stage/ (repo: `npm run stage`),
+ * else ../data/viz/web relative to this file (pipeline layout, where the
+ * deploy script runs it as a gate — SKIP_SMOKE=1 to bypass). Exit 0 = green.
  * ==========================================================================*/
 "use strict";
 
@@ -33,9 +36,16 @@ const path = require("path");
 const puppeteer = require("puppeteer-core");
 
 const WEB_DIR = process.env.NO2_WEB_DIR ||
-                path.join(__dirname, "..", "data", "viz", "web");
+  [path.resolve(".stage"),                              // repo: staged current build
+   path.join(__dirname, "..", "data", "viz", "web")]    // pipeline: the real bundle
+    .find(d => fs.existsSync(path.join(d, "index.html"))) ||
+  path.resolve(".stage");
 const HOVER_FLAG = "--blink-settings=primaryHoverType=2,availableHoverTypes=2," +
                    "primaryPointerType=4,availablePointerTypes=4";
+/* NO2_OFFLINE=1: refuse all DNS except localhost, proving the page needs no
+   network beyond its own host — basemap tiles fail, everything else must pass. */
+const OFFLINE_ARGS = process.env.NO2_OFFLINE
+  ? ["--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"] : [];
 
 /* --- Chrome from the puppeteer cache (puppeteer-core doesn't resolve it) --- */
 function findChrome() {
@@ -135,7 +145,7 @@ function pickHex(page) {
                                             { layers: ["r3-fill"] })[0];
         if (!f || seen.has(f.properties.id)) continue;
         seen.add(f.properties.id);
-        const [la, lo] = h3.cellToLatLng(f.properties.id);
+        const [la, lo] = window._app.h3.cellToLatLng(f.properties.id);
         const p = map.project([lo, la]);
         if (p.x < 400 || p.y < 130 || p.x > rect.width - 80 || p.y > rect.height - 220) continue;
         const d = (p.x - cx) ** 2 + (p.y - cy) ** 2;
@@ -171,7 +181,7 @@ async function desktopRun(browser, base) {
   // all three charts alive (rp-chart exists only once the panel drew)
   ok(await page.evaluate(() =>
     ["chart-perf", "chart-credit", "rp-chart"].every(id =>
-      !!echarts.getInstanceByDom(document.getElementById(id)))),
+      !!window._app.echarts.getInstanceByDom(document.getElementById(id)))),
     "three live ECharts instances");
 
   /* The credit line waits on series.bin / a range request, and it changes the
@@ -201,7 +211,7 @@ async function desktopRun(browser, base) {
   // (fetched per hex via HTTP range requests) next to the res-3 region line
   const fine = await page.evaluate(id => new Promise(res => {
     const map = window._appMap;
-    const [la, lo] = h3.cellToLatLng(id);
+    const [la, lo] = window._app.h3.cellToLatLng(id);
     map.jumpTo({ center: [lo, la], zoom: 9.4 });
     const t0 = Date.now();
     (function poll() {   // fine chunks stream in after idle; retry briefly
@@ -209,7 +219,7 @@ async function desktopRun(browser, base) {
       let best = null;
       const vp = [[0, 0], [rect.width, rect.height]];
       for (const f of map.queryRenderedFeatures(vp, { layers: ["fine-fill"] })) {
-        const [fla, flo] = h3.cellToLatLng(f.properties.id);
+        const [fla, flo] = window._app.h3.cellToLatLng(f.properties.id);
         const p = map.project([flo, fla]);
         if (p.x < 400 || p.y < 130 || p.x > rect.width - 80 || p.y > rect.height - 220) continue;
         const d = (p.x - rect.width * 0.6) ** 2 + (p.y - rect.height * 0.4) ** 2;
@@ -226,7 +236,7 @@ async function desktopRun(browser, base) {
     await pickGroup(page, "NO₂");
     await page.mouse.move(fine.x, fine.y);
     const twoLines = await page.waitForFunction(id => {
-      const ch = window.echarts && echarts.getInstanceByDom(document.getElementById("rp-chart"));
+      const ch = window._app && window._app.echarts.getInstanceByDom(document.getElementById("rp-chart"));
       if (!ch || !document.getElementById("rp-h3").textContent.includes(id)) return false;
       const s = ch.getOption().series;
       return s.length === 2 && s[1].name === "this hex" && s[1].data.some(v => v != null);
@@ -257,7 +267,7 @@ async function desktopRun(browser, base) {
     const c = window._appMap.getCenter();
     return { lat: c.lat, lng: c.lng, zoom: window._appMap.getZoom(),
              /* the deep link carries the horizon, so both rows must reflect it */
-             layer: activeLayer,
+             layer: window._app.activeLayer,
              group: [...document.querySelectorAll("#layer-buttons button")]
                       .find(b => b.getAttribute("aria-pressed") === "true")?.textContent,
              sub: [...document.querySelectorAll("#sub-buttons button")]
@@ -306,7 +316,7 @@ const cardState = page => page.evaluate(() => ({
               .map((e, i) => e.classList.contains("on") ? i : -1).filter(i => i >= 0)
 }));
 const layerState = page => page.evaluate(() => ({
-  active: activeLayer,
+  active: window._app.activeLayer,
   group: [...document.querySelectorAll("#layer-buttons button")]
            .find(b => b.getAttribute("aria-pressed") === "true")?.textContent,
   sub: [...document.querySelectorAll("#sub-buttons button")]
@@ -318,11 +328,11 @@ const layerState = page => page.evaluate(() => ({
 
 const topState = page => page.evaluate(() => {
   const m = /[0-9a-f]{15}/.exec(document.getElementById("rp-h3").textContent);
-  const ec = window.echarts && echarts.getInstanceByDom(document.getElementById("rp-chart"));
+  const ec = window._app && window._app.echarts.getInstanceByDom(document.getElementById("rp-chart"));
   const ser = ec ? (ec.getOption().series || []) : [];
   const paid = ser.find(s => s.name === "credit paid");
   return {
-    res: displayRes(), zoom: window._appMap.getZoom(),
+    res: window._app.displayRes(), zoom: window._appMap.getZoom(),
     title: document.getElementById("top-title").textContent,
     note: document.getElementById("top-note").textContent,
     rows: document.querySelectorAll("#top-table button.loc").length,
@@ -335,7 +345,7 @@ const topState = page => page.evaluate(() => {
     rowCells: [...document.querySelectorAll("#top-table tr")]
                 .map(tr => [...tr.querySelectorAll("td")].map(td => td.textContent)),
     pinned: document.getElementById("region-panel").classList.contains("pinned"),
-    pinnedRes: m ? h3.getResolution(m[0]) : null,
+    pinnedRes: m ? window._app.h3.getResolution(m[0]) : null,
     cred: document.getElementById("rp-cred").textContent,
     credBars: paid ? paid.data.filter(v => v != null).length : 0,
     scope: [...document.querySelectorAll("#sub-buttons button")]
@@ -553,6 +563,7 @@ async function layerRun(browser, base) {
      to ship unnoticed: the layers, the four credit windows per resolution and
      the credit-history scales are all keyed by string. */
   const scales = await page.evaluate(() => {
+    const { S, LAYERS, scaleKey, dec, fmt } = window._app;
     const need = ["m", "yoy", "trend", "trend5"];
     for (const r of [3, 4, 5, 6]) {
       for (const sfx of ["", "y", "a", "h"]) need.push("credit" + r + sfx);
@@ -730,7 +741,8 @@ async function touchRun(browser, base) {
 /* --- Main --------------------------------------------------------------------- */
 (async () => {
   if (!fs.existsSync(path.join(WEB_DIR, "index.html"))) {
-    console.error("No web bundle at " + WEB_DIR + " — run scripts/06_viz.R first.");
+    console.error("No web bundle at " + WEB_DIR + " — pipeline: run scripts/06_viz.R; " +
+                  "repo: npm run build && npm run stage (or set NO2_WEB_DIR).");
     process.exit(1);
   }
   const chrome = findChrome();
@@ -746,7 +758,7 @@ async function touchRun(browser, base) {
        to hover:none, undoing the blink-settings flag; size via --window-size */
     const browser = await puppeteer.launch({
       executablePath: chrome, headless: true, defaultViewport: null,
-      args: ["--window-size=1400,900", ...args]
+      args: ["--window-size=1400,900", ...OFFLINE_ARGS, ...args]
     });
     try {
       await run(browser, base);
