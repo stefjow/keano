@@ -34,13 +34,13 @@ containment — which is what makes H3's best-known flaw irrelevant here.
 
 - **Non-exact nesting.** Aperture-7 subdivision means children poke past
   their parent's geometric boundary. This bites systems that treat parents
-  as spatial containers; maeshle never does. The parent's `m` is the mean
+  as spatial containers; lufterl never does. The parent's `m` is the mean
   over its children's series, the shard-completeness claim in
   `04_metrics.R` holds because ancestor relations form an exact tree on
   IDs regardless of geometry, and the viz walks the same ID tree. Nothing
   in the pipeline asks "is this point inside that hexagon."
 - **Pentagons.** The 12 pentagons per resolution break code that assumes 7
-  children or 6 neighbors. maeshle computes means over *actual* children via
+  children or 6 neighbors. lufterl computes means over *actual* children via
   groupby and never traverses neighbors, so pentagons just make a few
   shards slightly smaller.
 - **Area variation.** Res-6 cells vary roughly ±20% in area globally.
@@ -100,7 +100,7 @@ weighting handles.
 ## Alternatives considered
 
 Native lat/lon grid: fails the equal-area fairness requirement, no
-hierarchy. S2: exact geometric nesting (which maeshle does not need) at the
+hierarchy. S2: exact geometric nesting (which lufterl does not need) at the
 price of worse area/shape uniformity and an awkward 4/8-neighbor
 structure. Admin boundaries: unstable, politically defined, wildly unequal
 (the camsmap lesson). H3 is the option that delivers stable global IDs,
