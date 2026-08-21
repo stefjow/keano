@@ -2,9 +2,63 @@
 
 Ideas collected 2026-08-07 after the ECharts / selection-model session,
 extended 2026-08-08 by the provenance / hardening session, 2026-08-10 by
-the tier fly-to / credit-history session and 2026-08-12 by the daily-vs-
-monthly measurement session.
+the tier fly-to / credit-history session, 2026-08-12 by the daily-vs-
+monthly measurement session and 2026-08-21 by the display-scale session.
 Rough order inside each section is by value-for-effort, not commitment.
+
+## Shipped 2026-08-21
+
+### fmt 2: the chart ceiling stopped hiding the reductions credit pays for
+
+Reported from the map: above ~115 µmol/m² the trend chart is a straight line
+along the top, the Change view reads flat with it — and credit is still being
+paid to those hexes.
+
+One constant was doing two incompatible jobs. `lmax` in script 06 is
+`quantile(m_pool, 0.999)` over the **latest month**, 114.9 µmol/m² in the
+2026-07 build, and it drove every m surface — including the u16 monthly series,
+which spans the **whole record**. Measured over 1.072e9 cell-months:
+
+* record max `m_v4` is **327.7**, 2.9x that ceiling; the history's own p99.9 is
+  135.9 and its p99.99 is 204.6
+* **1.79M cell-months clipped** (0.167%) across **34,862 cells**, each for a
+  median **56 of its 88 months** — most of an affected hex's record was a flat
+  line, not a stretch of one
+* in the shipped v1 bundle, 4,038 res-3 region-months were pinned at the top
+  level too, so the single-file build's region chart flat-lined as well
+* the app derives its Change view from that series client-side
+  (`drawRegionChart`), so a clipped stretch read as **exactly 0.0% YoY**
+* meanwhile credit is computed upstream on unclipped `m` and kept paying:
+  **9.7% of all credit ever paid** (6,038 of 62,164) falls in a clipped month,
+  11.0% against a clipped baseline, and **61%** of the summed first→last
+  descent of the affected cells happened above the ceiling, invisible
+* the readout was worse than the colors: the panel card decoded the u8 plane
+  and printed a flat `115` for a cell at 326, and the legend printed a bare
+  `115` as if it were the maximum
+
+Fix: split the constant instead of moving it. `lmax` keeps the quantile and
+drives the u8 map planes and the legend — trimming a color domain is right, the
+top 0.1% would otherwise spend a quarter of the ramp on values no city reads.
+The u16 series planes (`r3series`, `s<r>.bin`) get `lmax_s`, rounded up from the
+record maximum, published as `scales.mser`. Widening a u16 plane is free at
+65,534 levels; widening the u8 ramp would not have been. Legend and readout now
+print `115+` where the plane's top level is an open interval (`overMax`).
+
+Verified on a fixture-mode rebuild of the Central-Europe shard: `scales.m`
+byte-identical to v1 (106.3), `mser` at 209.0, **zero** saturated levels in
+`r3series` or `s6.bin`, and `s6.bin`'s maximum decoding to 208.6 — the record
+max the producer reported.
+
+Bundle format goes to **2**: a v1 app would decode the wider series against
+`scales.m` and read every value wrong, so this is not an ignorable addition. A
+v2 app still reads v1 by falling back to `scales.m`, which is what v1 encoded
+against. Credit was never quantized against this scale, so **nothing is
+re-scored** — the append-only contract is untouched and this is a viz rebuild.
+
+Residual, deliberately: the single-file build ships no per-hex series, so a
+clipped hex's `□ this cell now` marker still sits at the color ceiling there.
+The card beside it reads `115+`, so the two agree; only the web build can show
+the exact figure.
 
 ## Shipped 2026-08-10
 

@@ -143,6 +143,10 @@ do_shard = function(s) {
     r4 = mx(paid[, .(v = sum(credit)), by = .(r3, p = path %/% 64L, month)]$v),
     r5 = mx(paid[, .(v = sum(credit)), by = .(r3, p = path %/% 8L,  month)]$v),
     r6 = mx(paid$credit))
+  # Largest m anywhere in the record, for the series value scale (see "Scales").
+  # Taken at res 6: the coarser tiers are means over these cells, so none of
+  # them can exceed it.
+  mmax = mx(hist$m[is.finite(hist$m)])
   rm(hist, paid)
 
   last = open_dataset(DATA_METRICS) |>
@@ -176,7 +180,7 @@ do_shard = function(s) {
               .(r3, path, m, perf_short, perf_long, perf_5y, credit,
                 cr_y, cr_a, elig)]
   list(ser = ser, r3last = r3last, fine = fine, crwin = crwin,
-       crh3 = crh3, crmax = crmax)
+       crh3 = crh3, crmax = crmax, mmax = mmax)
 }
 
 # PSOCK, not fork (see script 03): arrow used pre-fork deadlocks in children
@@ -202,6 +206,7 @@ crwin  = rbindlist(lapply(res, `[[`, "crwin"))
 crh3   = rbindlist(lapply(res, `[[`, "crh3"))
 # elementwise max over the per-shard maxima: one global scale per tier
 crmax_h = do.call(pmax, lapply(res, `[[`, "crmax"))
+m_hist_max = max(vapply(res, `[[`, 0, "mmax"))
 rm(res)
 
 # --- Trim the month axis to the first month that carries data -----------------
@@ -265,6 +270,36 @@ r3last[, `:=`(
 m_pool = c(r3last$m3, fine$m)
 lmin = log10(max(1, as.numeric(quantile(m_pool, 0.005, na.rm = TRUE))))
 lmax = log10(as.numeric(quantile(m_pool, 0.999, na.rm = TRUE)))
+# TWO ceilings, because one constant was doing two incompatible jobs.
+#   * As a COLOR domain, `lmax` should be quantile-trimmed. The latest month's
+#     top 0.1% spans 115 … 326 µmol/m² (12,363 of 12.3M res-6 cells): anchoring
+#     the ramp on the true maximum would spend a quarter of its range above
+#     anything a city ever reads.
+#   * As a VALUE codec range it has to cover the data — and the series planes
+#     carry the whole record, not the latest month. Measured: 1.79M of 1.07e9
+#     cell-months sit above the latest month's p99.9, over 34,862 cells, for a
+#     median 56 of 88 months each. Sharing `lmax` clipped those to a flat line
+#     at the ceiling, and since the app derives its Change view from the series
+#     client-side, a clipped stretch read as exactly 0.0% YoY. Credit is
+#     computed upstream on unclipped m and kept being paid: 9.7% of all credit
+#     ever paid falls in a clipped month, and 61% of the summed first->last
+#     descent of the affected cells happened above the ceiling, invisible.
+# So `lmax` keeps its quantile and drives the u8 map planes and the legend;
+# `lmax_s` covers the record and drives the u16 series planes (r3series,
+# s<r>.bin). Widening the u16 span is ~free: 65,534 levels over 2.5 decades is
+# still a 0.009% step. Credit is untouched either way — it was never quantized
+# against this scale — so this is a display change with no re-scoring.
+ceil_sig = function(v, digits = 3L) {   # rounds UP, so the result covers v
+  e = 10^(floor(log10(v)) - (digits - 1L))
+  ceiling(v / e) * e
+}
+# Never narrower than the color ceiling: the client reads lmax_s > lmax as
+# "the map's top bucket is an open interval" and labels it accordingly.
+lmax_s = log10(max(if (m_hist_max > 0) ceil_sig(m_hist_max) else 0, 10^lmax))
+message("Scales: m 10^", round(lmin, 3), " … 10^", round(lmax, 3), " (",
+        round(10^lmax), " µmol/m², color) / 10^", round(lmax_s, 3), " (",
+        round(10^lmax_s), " µmol/m², series; record max ",
+        round(m_hist_max, 1), ")")
 # YoY/trend scales from the eligible pool: low-NO2 cells swing wildly in
 # relative terms and would wash out the meaningful signal (they just clamp).
 sym_y = signif(as.numeric(quantile(abs(c(r3last$y3, fine[elig == TRUE, perf_short])),
@@ -290,6 +325,7 @@ cy_max = c(cr_max(crwin$credit_y), cr_max(t4$cr_y), cr_max(t5$cr_y), cr_max(fine
 ca_max = c(cr_max(crwin$credit_a), cr_max(t4$cr_a), cr_max(t5$cr_a), cr_max(fine$cr_a))
 
 t_m   = function(v) clamp01((log10(pmax(v, 1e-6)) - lmin) / (lmax - lmin))
+t_ms  = function(v) clamp01((log10(pmax(v, 1e-6)) - lmin) / (lmax_s - lmin))
 t_sym = function(v, s) clamp01((v / s + 1) / 2)
 t_cr  = function(v, hi) sqrt(clamp01(v / hi))
 
@@ -346,7 +382,7 @@ ser[, i := chmatch(r3, r3_ids)]
 ser[, j := chmatch(month, months_all)]
 stopifnot(!anyNA(ser$j))   # the axis trim above must not orphan any m month
 t_ser = rep(NA_real_, nP * nm)
-t_ser[(ser$i - 1L) * nm + ser$j] = t_m(ser$sum_m / ser$n_m)
+t_ser[(ser$i - 1L) * nm + ser$j] = t_ms(ser$sum_m / ser$n_m)
 
 add_sec("r3ids", charToRaw(paste(r3_ids, collapse = "")))
 add_sec("tm3", delta_u8(lev_u8(t_m(r3last$m3))))
@@ -452,10 +488,14 @@ stats = as.list(monthly[month == latest,
 # --- Assemble --------------------------------------------------------------------
 meta = list(
   # Bundle format version — the contract with the lufterl-map client, spelled
-  # out in that repo's FORMAT.md. The client refuses any other value (absent
-  # means 1: v1 bundles predate the field). Bump on any change that would make
-  # an old app misread a new bundle or vice versa.
-  fmt = 1L,
+  # out in that repo's FORMAT.md. The client refuses anything it does not know
+  # (absent means 1: v1 bundles predate the field). Bump on any change that
+  # would make an old app misread a new bundle or vice versa.
+  # v2 adds scales$mser: the series planes get their own, wider ceiling. A v1
+  # app would decode them against scales$m and read every value wrong, so this
+  # is not an ignorable additive field. A v2 app still reads v1 by falling back
+  # to scales$m, which is exactly what v1 bundles encoded against.
+  fmt = 2L,
   month = latest,
   generated = format(Sys.time(), "%Y-%m-%d %H:%M"),
   # Cache key for every data URL. data/<month>/ is named by month, not by
@@ -471,6 +511,8 @@ meta = list(
   build = format(Sys.time(), "%Y%m%d%H%M%S"),
   months = months_all,
   scales = list(m = list(lmin = lmin, lmax = lmax),
+                # the u16 series planes: same axis, ceiling covering the record
+                mser = list(lmin = lmin, lmax = lmax_s),
                 yoy = list(sym = sym_y), trend = list(sym = sym_t),
                 trend5 = list(sym = sym_f),
                 credit3y = list(max = cy_max[1]), credit4y = list(max = cy_max[2]),
@@ -561,8 +603,8 @@ off6 = c(0L, cumsum(tabulate(fine$r3i, nbins = nP)))
 # (res-6: ~2.4 GB), cheap to store, never downloaded in bulk.
 do_series_shard = function(s) {
   clamp01 = function(t) pmin(pmax(t, 0), 1)
-  lev16 = function(m) {
-    t = clamp01((log10(pmax(m, 1e-6)) - lmin) / (lmax - lmin))
+  lev16 = function(m) {   # lmax_s, not lmax: these rows span the whole record
+    t = clamp01((log10(pmax(m, 1e-6)) - lmin) / (lmax_s - lmin))
     fifelse(is.finite(t), 1L + as.integer(round(t * 65533)), 0L)
   }
   write_rows = function(v, nrows, path) {
@@ -655,7 +697,7 @@ do_series_shard = function(s) {
 
 cl = makeCluster(max(1L, min(N_WORKERS, length(shards))), outfile = "")
 clusterExport(cl, c("do_series_shard", "parent_r3", "path_r6", "months_all",
-                    "latest", "nm", "lmin", "lmax", "wdata",
+                    "latest", "nm", "lmin", "lmax_s", "wdata",
                     "lev_crh", "crh_max", "clamp01",
                     "DATA_METRICS", "DATA_LOOKUP"))
 invisible(clusterEvalQ(cl, suppressMessages({

@@ -169,6 +169,18 @@ trend panel's chart follows the selected layer: NO₂ draws `m` itself, Change
 its change against a year earlier, and Credit **which months the hovered hex
 was actually paid in**, and how much, as bars.
 
+The NO₂ *color* ramp is trimmed to the latest month's p99.9 (~115 µmol/m²), so
+that a top 0.1% reaching 326 does not stretch the range no city ever uses, and
+its top bucket reads `115+` rather than pretending to be a value. The monthly
+series behind the chart is encoded against the **record's** own maximum
+instead. Sharing the trimmed ceiling flat-lined every hex that ever exceeded it
+— 34,862 cells, a median 56 of their 88 months — and because the Change view is
+derived from that series client-side, those stretches read as exactly 0.0% YoY
+while credit, computed upstream on unclipped `m`, kept being paid: 9.7% of all
+credit ever paid falls in a clipped month, and 61% of the summed first→last
+descent of the affected cells happened above the ceiling, invisible. Credit was
+never quantized against this scale, so the fix re-scores nothing.
+
 ### The app lives in lufterl-map
 
 The web app itself (MapLibre + h3-js + ECharts, all bundled — the basemap

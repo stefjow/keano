@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// GENERATED — built from lufterl-map v1.0.0 (2026-08-17). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
+// GENERATED — built from lufterl-map v1.0.0-2-g5c5857c (2026-08-21). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
 /* ============================================================================
  * Smoke test of the built web bundle (lufterl-map)
  * ============================================================================
@@ -586,6 +586,26 @@ async function layerRun(browser, base) {
   ok(scales.bad.length === 0,
      "every layer resolves to a finite decoder + formatter" +
      (scales.bad.length ? " — BAD " + scales.bad.join(", ") : ""));
+
+  /* fmt >= 2: the u16 series planes carry their own ceiling, which has to cover
+     the whole record and so can never sit below the map planes' trimmed one.
+     A producer that dropped `mser` would silently decode every series value
+     against the wrong scale — the exact bug v2 exists to fix — and the app
+     cannot tell from the bytes, so assert the contract here. */
+  const mser = await page.evaluate(() => {
+    const { META, S, dec } = window._app;
+    return { fmt: META.fmt == null ? 1 : META.fmt, has: !!S.mser,
+             mLmax: S.m.lmax, sLmax: S.mser && S.mser.lmax,
+             top: dec.mser(1) };
+  });
+  if (mser.fmt >= 2) {
+    ok(mser.has && mser.sLmax >= mser.mLmax && Number.isFinite(mser.top),
+       "series scale covers the record (mser ceiling " + mser.top.toFixed(0) +
+       " >= map ceiling " + Math.pow(10, mser.mLmax).toFixed(0) + " µmol/m²)");
+  } else {
+    ok(!mser.has && Number.isFinite(mser.top),
+       "fmt 1 bundle: series decode falls back to the map scale");
+  }
 
   const groups = await page.$$eval("#layer-buttons button", bs => bs.map(b => b.textContent));
   ok(groups.length === 3 && groups.join("/") === "Change/Credit/NO₂",
