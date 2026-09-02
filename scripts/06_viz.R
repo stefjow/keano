@@ -536,6 +536,13 @@ meta = list(
 # interpret backslashes/backreferences in them.
 html = paste(readLines("viz/template.html", encoding = "UTF-8"), collapse = "\n")
 html = gsub("__NAME__", PROJECT_NAME, html, fixed = TRUE)  # brand name: single source of truth (config.R)
+# Carto key (config.R <- .Renviron). Never into a fixture build: the fixture is
+# committed in the public lufterl-map repo. Empty = Carto's watermark on the tiles.
+fixture = nzchar(Sys.getenv("NO2_VIZ_SHARDS"))
+carto_key = if (fixture) "" else CARTO_KEY
+if (!fixture && !nzchar(carto_key))
+  message("NO2_CARTO_KEY not set — basemap tiles will carry Carto's 'API key required' watermark")
+html = gsub("__CARTO_KEY__", carto_key, html, fixed = TRUE)
 splice = function(meta_list, bin_b64, out_file) {
   a = strsplit(html, "__META__", fixed = TRUE)[[1]]
   stopifnot(length(a) == 2)

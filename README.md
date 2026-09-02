@@ -93,11 +93,15 @@ TERRASCOPE_USER=...       # Terrascope account, used by terrascoper (script 01)
 TERRASCOPE_PASS=...
 NO2_DATA_RAW=...        # append-only GeoTIFF archive       (scripts 01-03)
 NO2_PUBLISH_DIR=...     # published derived views           (script 07)
+NO2_CARTO_KEY=...       # Carto Basemaps API key, spliced into the map's tile URLs (script 06)
 ```
 
 `config/config.R` binds the two paths lazily, so a missing one is an error
 only in the scripts that actually touch it; 04, 05 and 06 (metrics,
-rankings, map) run with neither set.
+rankings, map) run with neither set. The Carto key is optional in the same
+spirit: without it script 06 still builds, the basemap just carries Carto's
+"API key required" watermark. It is a client-side key and ends up in the
+deployed page by nature, which is why it lives here and not in the repo.
 
 `scripts/08_deploy.sh` takes its rsync destination from a gitignored
 `.deploy.env` in the repo root (or from the environment, or as positional
@@ -186,8 +190,8 @@ never quantized against this scale, so the fix re-scores nothing.
 The web app itself (MapLibre + h3-js + ECharts, all bundled — the basemap
 tiles are its only external reference) is developed, tested and released in
 the **lufterl-map** repo. This pipeline consumes it as three committed files:
-`viz/template.html` (the app shell, with `__NAME__`/`__META__`/`__BIN__`
-placeholders script 06 splices), `scripts/09_smoketest.js` and
+`viz/template.html` (the app shell, with `__NAME__`/`__META__`/`__BIN__`/
+`__CARTO_KEY__` placeholders script 06 splices), `scripts/09_smoketest.js` and
 `viz/VIZ_VERSION`. Refresh them with `scripts/update_viz.sh` (builds a
 sibling checkout, default `../lufterl-map`, override `LUFTERL_MAP_DIR`), then
 rerun script 06 and commit all three together.

@@ -19,6 +19,15 @@ source("_share.r")
 #   * the git remotes / GitHub repo name / the working-copy directory
 PROJECT_NAME = "lufterl"
 
+# --- Basemap ----------------------------------------------------------------
+# Carto Basemaps API key (carto.com/basemaps/apikey; free up to 5M tile
+# requests a month, CARTO + OpenStreetMap attribution must stay visible).
+# Script 06 splices it into the map's tile URLs (__CARTO_KEY__ in
+# viz/template.html); without it Carto serves the tiles with an "API key
+# required" watermark. The key is public in the deployed page by nature but
+# must not sit in this (public) repo — set NO2_CARTO_KEY in .Renviron.
+CARTO_KEY = Sys.getenv("NO2_CARTO_KEY")
+
 # --- Paths ------------------------------------------------------------------
 # DATA_RAW and PUBLISH_DIR live on infrastructure outside this repo; set
 # NO2_DATA_RAW / NO2_PUBLISH_DIR in .Renviron (gitignored). Lazy so
