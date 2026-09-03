@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// GENERATED — built from lufterl-map v1.0.0-5-g1454afc (2026-09-02). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
+// GENERATED — built from lufterl-map v1.1.0 (2026-09-03). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
 /* ============================================================================
  * Smoke test of the built web bundle (lufterl-map)
  * ============================================================================
@@ -200,12 +200,48 @@ async function desktopRun(browser, base) {
   ok(await $display(page, "#rp-pin") !== "none", "⌖ pinned chip is visible");
   ok(await $display(page, "#rp-close") === "none", "× stays touch-only");
 
+  /* The unpin chip is anchored to the pinned cell itself rather than to the
+     rail — the whole point of it. So it has to hang above the cell's centre,
+     travel with the cell when the map moves, and leave with the pin. */
+  const chipAt = () => page.evaluate(id => {
+    const b = document.getElementById("unpin");
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    const [la, lo] = window._app.h3.cellToLatLng(id);
+    const c = window._appMap.project([lo, la]);
+    return { dx: r.left + r.width / 2 - c.x, dy: r.bottom - c.y };
+  }, hex.id);
+  let chip = await chipAt();
+  ok(chip && Math.abs(chip.dx) < 30 && chip.dy < 0,
+     "the unpin chip hangs above the pinned cell" + (chip
+       ? " (dx " + Math.round(chip.dx) + ", dy " + Math.round(chip.dy) + ")"
+       : " — absent"));
+
   // chip releases without hiding or resizing the panel
   const before = st.height;
   await page.click("#rp-pin");
   st = await panelState(page);
   ok(!st.pinned && !st.hidden, "chip releases the pin without hiding the panel");
   ok(st.height === before, "panel height unchanged on release (" + before + "px)");
+  ok(await page.$("#unpin") === null, "releasing takes the map chip with it");
+
+  /* Re-pin, then move the map: a geographic anchor has to follow the cell, and
+     the outline has to survive the source rebuild that the pan triggers. */
+  await page.mouse.click(hex.x, hex.y);
+  await page.evaluate(() => new Promise(r => {
+    window._appMap.once("moveend", r);
+    window._appMap.panBy([-70, 30], { duration: 0 });
+  }));
+  chip = await chipAt();
+  ok(chip && Math.abs(chip.dx) < 30 && chip.dy < 0,
+     "the chip follows the cell across a pan");
+  ok(await page.waitForFunction(() => window._appMap.querySourceFeatures("pin").length > 0,
+                                { timeout: 5000 }).then(() => true).catch(() => false),
+     "the pinned cell keeps its own outline across the pan");
+  await page.click("#unpin");
+  st = await panelState(page);
+  ok(!st.pinned && !st.hidden && (await $text(page, "#rp-h3")).includes(hex.id),
+     "the chip releases the pin without re-pinning the cell under it");
 
   // zoomed in, the region chart must gain the hovered hex's own series line
   // (fetched per hex via HTTP range requests) next to the res-3 region line
@@ -243,6 +279,49 @@ async function desktopRun(browser, base) {
     }, { timeout: 8000 }, fine.id).then(() => true).catch(() => false);
     ok(twoLines, "hovering " + fine.id + " draws its own line next to the region line");
   }
+
+  /* Satellite mode. Past the switch the Esri imagery is in and the NO2 fills are
+     out — but they go out by opacity, not by visibility, precisely so the cells
+     stay pickable up there: the panel and the pin have to keep working over the
+     ground. The labels switch to Carto's light variant — dark text on a pale
+     halo — whatever the theme says, that being the readable one on imagery. */
+  const atZoom = z => page.evaluate(zz => new Promise(r => {
+    window._appMap.once("moveend", r);
+    window._appMap.setZoom(zz);
+  }), z);
+  const waitFor = (fn, ms) => page.waitForFunction(fn, { timeout: ms })
+    .then(() => true).catch(() => false);
+  ok(await page.evaluate(() => window._appMap.getMaxZoom()) === 16,
+     "the camera reaches zoom 16, deep enough for imagery to be worth it");
+  await atZoom(8);
+  const lowAttrib = await page.$eval(".maplibregl-ctrl-attrib-inner", e => e.textContent);
+  ok(lowAttrib.includes("CARTO") && !lowAttrib.includes("Esri"),
+     "below the switch the imagery is not credited (" + lowAttrib + ")");
+  await atZoom(12);
+  ok(await waitFor(() => document.querySelector(".maplibregl-ctrl-attrib-inner")
+                           .textContent.includes("Esri"), 15000),
+     "above it Esri is credited, so its imagery is on screen");
+  const live = await page.evaluate(() => {
+    const m = window._appMap, r = m.getContainer().getBoundingClientRect();
+    const p = m.project(m.getCenter());   // padded centre: clear of the rail
+    return { hits: m.queryRenderedFeatures([p.x, p.y], { layers: ["fine-fill"] }).length,
+             x: r.left + p.x, y: r.top + p.y };
+  });
+  ok(live.hits > 0, "the faded-out cells are still pickable over the imagery");
+  if (live.hits > 0) {
+    await page.mouse.click(live.x, live.y);
+    const sat = await panelState(page);
+    ok(sat.pinned && !sat.hidden, "so a cell can still be pinned there");
+  }
+  const labelsOn = () => page.evaluate(() => ["dark", "light"].find(v =>
+    window._appMap.getLayoutProperty("labels-" + v, "visibility") !== "none"));
+  ok(await waitFor(() => window._appMap
+       .getLayoutProperty("labels-light", "visibility") !== "none", 5000),
+     "the dark theme takes Carto's light labels over the imagery");
+  await atZoom(8);
+  ok(await waitFor(() => window._appMap
+       .getLayoutProperty("labels-dark", "visibility") !== "none", 5000),
+     "and hands them back to the theme on the way out (" + await labelsOn() + ")");
 
   ok(errors.length === 0, "no page errors / failed local requests" +
      (errors.length ? " — " + errors.join("; ") : ""));
@@ -312,8 +391,9 @@ const pickSub = (page, i) =>
 const cardState = page => page.evaluate(() => ({
   labels: [...document.querySelectorAll("#rp-metrics .k")].map(e => e.textContent),
   values: [...document.querySelectorAll("#rp-metrics .v")].map(e => e.textContent),
-  accented: [...document.querySelectorAll("#rp-metrics div")]
-              .map((e, i) => e.classList.contains("on") ? i : -1).filter(i => i >= 0)
+  accented: [...document.querySelectorAll("#rp-metrics button")]
+              .map((e, i) => e.getAttribute("aria-pressed") === "true" ? i : -1)
+              .filter(i => i >= 0)
 }));
 const layerState = page => page.evaluate(() => ({
   active: window._app.activeLayer,
@@ -675,6 +755,15 @@ async function layerRun(browser, base) {
     const c = await cardState(page);
     ok(c.accented.length === 1 && c.accented[0] === 1,
        "selecting Credit moves the accent to the credit card");
+
+    /* The cards are controls, not readouts: pressing one paints the map by that
+       layer at the horizon the card names, and the accent follows. */
+    await page.evaluate(() => document.querySelectorAll("#rp-metrics button")[0].click());
+    const d = await cardState(page), ls = await layerState(page);
+    ok(ls.active === "trend5" && ls.group === "Change" && ls.sub === "5 years",
+       "pressing the Change card selects the horizon it names (" + ls.active + ")");
+    ok(d.accented.length === 1 && d.accented[0] === 0,
+       "and the accent follows to the pressed card");
   }
 
   /* The list must follow the drawn tier even when the active layer is not a
@@ -749,6 +838,24 @@ async function touchRun(browser, base) {
   ok(st.pinned && !st.hidden, "tap pins the panel");
   ok(await $display(page, "#rp-close") !== "none", "× is visible");
   ok(await $display(page, "#rp-pin") === "none", "⌖ chip is hover-only");
+  ok(await page.$("#unpin") === null, "so is the chip on the map");
+
+  /* On a phone the cards are the layer control within thumb reach — the rail's
+     own is pinned to the far top-left corner. (Clicked, not tapped: this run
+     emulates the hover:none pointer, not a touchscreen.) */
+  const was = await page.evaluate(() => window._app.activeLayer);
+  const cards = await page.$$("#rp-metrics button");
+  ok(cards.length === 3, "the panel shows one pressable card per primary layer");
+  if (cards.length === 3) {
+    await cards[1].click();
+    const got = await page.evaluate(() => ({
+      active: window._app.activeLayer,
+      pressed: [...document.querySelectorAll("#rp-metrics button")]
+                 .findIndex(b => b.getAttribute("aria-pressed") === "true")
+    }));
+    ok(got.active !== was && got.pressed === 1,
+       "tapping the credit card paints the map by it (" + was + " → " + got.active + ")");
+  }
 
   await page.click("#rp-close");
   ok((await panelState(page)).hidden, "× dismisses the panel");
