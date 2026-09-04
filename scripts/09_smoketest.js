@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// GENERATED — built from lufterl-map v1.1.0 (2026-09-03). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
+// GENERATED — built from lufterl-map v1.1.1 (2026-09-04). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
 /* ============================================================================
  * Smoke test of the built web bundle (lufterl-map)
  * ============================================================================
@@ -685,6 +685,48 @@ async function layerRun(browser, base) {
   } else {
     ok(!mser.has && Number.isFinite(mser.top),
        "fmt 1 bundle: series decode falls back to the map scale");
+  }
+
+  /* An open NO₂ box. The u8 map plane stops at the ramp's trimmed ceiling, so
+     a cell above it used to read “115+” in the panel while the chart right
+     under it drew the real figure off `mser`. The box now closes itself from
+     that same series, so the two have to agree at the last month. Only a v2
+     bundle clamps anything, and only where something sits above the ceiling. */
+  if (mser.fmt >= 2) {
+    const home = await page.evaluate(() => {
+      const map = window._appMap, c = map.getCenter();
+      const back = { center: [c.lng, c.lat], zoom: map.getZoom() };   // before the jump
+      const f = map.querySourceFeatures("r3").find(x => x.properties.tm >= 1);
+      if (!f) return null;
+      const [la, lo] = window._app.h3.cellToLatLng(f.properties.id);
+      map.jumpTo({ center: [lo, la], zoom: 4.8 });
+      const p = map.project([lo, la]), r = map.getContainer().getBoundingClientRect();
+      return { id: f.properties.id, x: r.left + p.x, y: r.top + p.y, back };
+    });
+    if (!home) {
+      console.log("  skip  nothing above the map ceiling in this bundle");
+    } else {
+      await pickGroup(page, "NO₂");   // the chart draws m itself on this group
+      await page.mouse.click(home.x, home.y);
+      const box = await page.waitForFunction(id => {
+        if (!document.getElementById("rp-h3").textContent.includes(id)) return false;
+        const b = [...document.querySelectorAll("#rp-metrics button")]
+                    .find(x => x.querySelector(".k").textContent.trim() === "NO₂");
+        if (!b || b.querySelector(".v").textContent.includes("+")) return false;
+        const ec = window._app.echarts.getInstanceByDom(document.getElementById("rp-chart"));
+        const d = ec && (ec.getOption().series[0].data || []).filter(v => v != null);
+        if (!d || !d.length) return false;
+        return { card: b.querySelector(".v").textContent,
+                 want: window._app.fmt.m(d[d.length - 1]) };
+      }, { timeout: 30000 }, home.id).then(h => h.jsonValue()).catch(() => null);
+      ok(box, "the NO₂ box on " + home.id + " closes above the map ceiling");
+      if (box) {
+        ok(box.card.startsWith(box.want),
+           "and reads what the chart draws (" + box.card + " vs " + box.want + ")");
+      }
+      await page.keyboard.press("Escape");
+      await page.evaluate(v => window._appMap.jumpTo(v), home.back);
+    }
   }
 
   const groups = await page.$$eval("#layer-buttons button", bs => bs.map(b => b.textContent));
