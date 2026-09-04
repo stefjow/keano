@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// GENERATED — built from lufterl-map v1.1.1 (2026-09-04). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
+// GENERATED — built from lufterl-map v1.1.2 (2026-09-04). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
 /* ============================================================================
  * Smoke test of the built web bundle (lufterl-map)
  * ============================================================================
