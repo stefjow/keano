@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// GENERATED — built from lufterl-map v1.1.2 (2026-09-04). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
+// GENERATED — built from lufterl-map v1.2.0 (2026-09-04). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
 /* ============================================================================
  * Smoke test of the built web bundle (lufterl-map)
  * ============================================================================
@@ -17,7 +17,7 @@
  *                 Credit, their scales and hash round-trip;
  *   top regions — the three credit-window scopes, → flying to a hex in every
  *                 tier the map draws without leaving that tier, and the
- *                 heading pager (10 rows × 10 pages, ranks running on);
+ *                 ten-row default with its “show top n” toggle;
  *   touch       — default headless (hover:none): tap pins, × dismisses.
  *
  * Needs: npm install (puppeteer-core) and a Chrome under ~/.cache/puppeteer
@@ -159,6 +159,9 @@ function pickHex(page) {
 
 const $text = (page, sel) => page.$eval(sel, el => el.textContent);
 const $display = (page, sel) => page.$eval(sel, el => getComputedStyle(el).display);
+/* Which hex the region panel is showing. The copy-link button carries it in
+   data-h3; the panel prints coordinates, not the fifteen-character index. */
+const $hex = page => page.$eval("#rp-h3", el => el.dataset.h3 || "");
 const panelState = page => page.$eval("#region-panel", el =>
   ({ hidden: el.hidden, pinned: el.classList.contains("pinned"), height: el.offsetHeight }));
 
@@ -176,13 +179,15 @@ async function desktopRun(browser, base) {
   await page.waitForFunction("!document.getElementById('region-panel').hidden", { timeout: 5000 });
   let st = await panelState(page);
   ok(!st.hidden && !st.pinned, "hover shows the region panel unpinned");
-  ok((await $text(page, "#rp-h3")).includes(hex.id), "panel shows the hovered hex " + hex.id);
+  ok((await $hex(page)) === hex.id, "panel shows the hovered hex " + hex.id);
+  ok((await page.$eval("#rp-h3", el => el.title)).includes(hex.id),
+     "and the copy button still names it for anyone who wants to read it");
 
-  // all three charts alive (rp-chart exists only once the panel drew)
+  // both charts alive (rp-chart exists only once the panel drew)
   ok(await page.evaluate(() =>
-    ["chart-perf", "chart-credit", "rp-chart"].every(id =>
+    ["chart-global", "rp-chart"].every(id =>
       !!window._app.echarts.getInstanceByDom(document.getElementById(id)))),
-    "three live ECharts instances");
+    "two live ECharts instances");
 
   /* The credit line waits on series.bin / a range request, and it changes the
      panel's height when it lands. Settle it before measuring heights below,
@@ -197,7 +202,7 @@ async function desktopRun(browser, base) {
   await page.mouse.click(hex.x, hex.y);
   st = await panelState(page);
   ok(st.pinned, "click pins the panel");
-  ok(await $display(page, "#rp-pin") !== "none", "⌖ pinned chip is visible");
+  ok(await $display(page, "#rp-pin") !== "none", "⌖ unpin chip is visible");
   ok(await $display(page, "#rp-close") === "none", "× stays touch-only");
 
   /* The unpin chip is anchored to the pinned cell itself rather than to the
@@ -240,7 +245,7 @@ async function desktopRun(browser, base) {
      "the pinned cell keeps its own outline across the pan");
   await page.click("#unpin");
   st = await panelState(page);
-  ok(!st.pinned && !st.hidden && (await $text(page, "#rp-h3")).includes(hex.id),
+  ok(!st.pinned && !st.hidden && (await $hex(page)) === hex.id,
      "the chip releases the pin without re-pinning the cell under it");
 
   // zoomed in, the region chart must gain the hovered hex's own series line
@@ -273,7 +278,7 @@ async function desktopRun(browser, base) {
     await page.mouse.move(fine.x, fine.y);
     const twoLines = await page.waitForFunction(id => {
       const ch = window._app && window._app.echarts.getInstanceByDom(document.getElementById("rp-chart"));
-      if (!ch || !document.getElementById("rp-h3").textContent.includes(id)) return false;
+      if (!ch || document.getElementById("rp-h3").dataset.h3 !== id) return false;
       const s = ch.getOption().series;
       return s.length === 2 && s[1].name === "this hex" && s[1].data.some(v => v != null);
     }, { timeout: 8000 }, fine.id).then(() => true).catch(() => false);
@@ -331,10 +336,10 @@ async function desktopRun(browser, base) {
   const dl = await newPage(browser, base + "#trend/" + hex.id);
   await dl.page.waitForFunction(id =>
     document.getElementById("region-panel").classList.contains("pinned") &&
-    document.getElementById("rp-h3").textContent.includes(id),
+    document.getElementById("rp-h3").dataset.h3 === id,
     { timeout: 20000 }, hex.id).catch(() => {});
   const dst = await panelState(dl.page);
-  ok(dst.pinned && (await $text(dl.page, "#rp-h3")).includes(hex.id),
+  ok(dst.pinned && (await $hex(dl.page)) === hex.id,
      "deep link #trend/" + hex.id + " arrives pinned on that hex");
   ok(dl.errors.length === 0, "deep link page clean" +
      (dl.errors.length ? " — " + dl.errors.join("; ") : ""));
@@ -374,8 +379,9 @@ async function desktopRun(browser, base) {
    res-4 or res-5, so → flew the reader clean out of the tier they were reading
    (always zoom 4.8) instead of to the hex they had clicked on. */
 const TIER_ZOOM = [[4, 5.6], [5, 6.8], [6, 9.2]];
-const TIER_TITLE = { 4: "Top areas — in view", 5: "Top areas — in view",
-                     6: "Top cells — in view" };
+const TIER_TITLE = { 4: "Top areas in view — this month",
+                     5: "Top areas in view — this month",
+                     6: "Top cells in view — this month" };
 
 /* the layer control is two rows: primary groups, then that group's horizons */
 const pickGroup = (page, label) => page.evaluate(g => {
@@ -407,22 +413,26 @@ const layerState = page => page.evaluate(() => ({
 }));
 
 const topState = page => page.evaluate(() => {
-  const m = /[0-9a-f]{15}/.exec(document.getElementById("rp-h3").textContent);
+  const m = /[0-9a-f]{15}/.exec(document.getElementById("rp-h3").dataset.h3 || "");
   const ec = window._app && window._app.echarts.getInstanceByDom(document.getElementById("rp-chart"));
   const ser = ec ? (ec.getOption().series || []) : [];
   const paid = ser.find(s => s.name === "credit paid");
   return {
     res: window._app.displayRes(), zoom: window._appMap.getZoom(),
     title: document.getElementById("top-title").textContent,
-    note: document.getElementById("top-note").textContent,
+    titleTip: document.getElementById("top-title").title,
     rows: document.querySelectorAll("#top-table button.loc").length,
-    pager: document.getElementById("top-pager").hidden ? null
-             : document.querySelector("#top-pager span").textContent,
-    pagerOff: [...document.querySelectorAll("#top-pager button")].map(b => b.disabled),
-    ranks: [...document.querySelectorAll("#top-table .rk")].map(td => td.textContent),
+    heads: [...document.querySelectorAll("#top-table th")].map(th => th.textContent),
+    more: document.getElementById("top-more").hidden ? null
+            : document.getElementById("top-more").textContent,
+    ranks: [...document.querySelectorAll("#top-table td.rk")].map(td => td.textContent),
+    /* the header row carries th, not td: keep the body rows only, so index 0
+       is still rank 1 */
     rowVals: [...document.querySelectorAll("#top-table tr")]
-               .map(tr => tr.querySelector(".cr")?.textContent),
+               .filter(tr => tr.querySelector("td"))
+               .map(tr => tr.querySelector("td.cr")?.textContent),
     rowCells: [...document.querySelectorAll("#top-table tr")]
+                .filter(tr => tr.querySelector("td"))
                 .map(tr => [...tr.querySelectorAll("td")].map(td => td.textContent)),
     pinned: document.getElementById("region-panel").classList.contains("pinned"),
     pinnedRes: m ? window._app.h3.getResolution(m[0]) : null,
@@ -449,11 +459,6 @@ function okCreditMarkers(st, label) {
 const settleTop = page =>
   page.waitForFunction(() => document.querySelector("#top-table button.loc"),
                        { timeout: 30000 }).catch(() => {});
-
-/* ‹ is button 0, › is button 1; the table redraws synchronously from data the
-   page already has, so there is nothing to settle afterwards. */
-const clickPage = (page, i) =>
-  page.evaluate(n => document.querySelectorAll("#top-pager button")[n]?.click(), i);
 
 async function zoomTo(page, zoom) {
   await page.evaluate(z => new Promise(r => {
@@ -489,7 +494,7 @@ async function topRegionsRun(browser, base) {
   ok(scopes.length === 3, "three credit windows offered (" + scopes.join(" / ") + ")");
 
   /* Every window fills the table, labels itself, marks its own button, and
-     says in the note which window it is showing. */
+     names the window it is showing in the heading. */
   const WIN_WORD = ["this month", "last 12 months", "all time"];
   for (let i = scopes.length - 1; i >= 0; i--) {
     await pickSub(page, i);
@@ -497,8 +502,8 @@ async function topRegionsRun(browser, base) {
     const st = await topState(page);
     ok(st.scope === scopes[i], "scope “" + scopes[i] + "” is the pressed button");
     ok(st.rows > 0, "scope “" + scopes[i] + "” lists " + st.rows + " row(s), each with a →");
-    ok(st.note.includes(WIN_WORD[i]),
-       "scope “" + scopes[i] + "” names its window in the note (" + WIN_WORD[i] + ")");
+    ok(st.title.includes(WIN_WORD[i]),
+       "scope “" + scopes[i] + "” names its window in the heading (" + WIN_WORD[i] + ")");
   }
 
   await pickSub(page, 0);   // back to last-month for the per-tier walk
@@ -520,10 +525,14 @@ async function topRegionsRun(browser, base) {
     ok(st.res === res, "zoom " + zoom + " draws the res-" + res + " tier");
     ok(st.title === TIER_TITLE[res],
        "res-" + res + " list titles itself “" + st.title + "”");
-    /* wording has to distinguish the tiers, not just be present: the res-3
-       note also carries a Σ and a km² figure ("region", not "area") */
-    ok(st.note.includes(res === 6 ? "5-year low" : "km² area"),
-       "res-" + res + " note explains " + (res === 6 ? "a per-cell %" : "a Σ over children"));
+    /* the heading's tooltip says how much ground one row covers, and has to
+       distinguish the tiers: res-3 reads "km² region", not "km² area" */
+    ok(st.titleTip.includes(res === 6 ? "36 km²" : "km² area"),
+       "res-" + res + " heading tip explains " +
+       (res === 6 ? "a single cell" : "a sum over children"));
+    /* the column headers replaced the paragraph of prose that named the glyphs */
+    ok(st.heads.includes("credit") && (res === 6) !== st.heads.includes("cells"),
+       "res-" + res + " heads its columns (" + st.heads.filter(Boolean).join("|") + ")");
     ok(st.rows > 0, "res-" + res + " lists " + st.rows + " credited hex(es) in view");
     if (!st.rows) continue;
     /* res-4/5 rows carry the count of credited res-6 children, like res-3 does;
@@ -560,7 +569,7 @@ async function topRegionsRun(browser, base) {
     await zoomTo(page, 9.2);
     const w = await topState(page);
     ok(w.res === 6, "window “" + scopes[win] + "”: still at res-6 (" + w.res + ")");
-    ok(w.title === "Top cells — in view",
+    ok(w.title === "Top cells in view — " + WIN_WORD[win],
        "window “" + scopes[win] + "” lists cells, not regions (" + w.title + ")");
     ok(w.rows > 0, "window “" + scopes[win] + "” lists " + w.rows + " cell(s) in view");
     if (w.rows) {
@@ -579,43 +588,34 @@ async function topRegionsRun(browser, base) {
     }
   }
 
-  /* The pager: ten rows a page, ten pages deep, ranks running on across pages.
-     It lives in the heading so the deeper pages cost no vertical space, which
-     only holds while the rank column stays absolute — a slice that restarted
-     at 1 on every page would make → fly to a rank the reader cannot name. */
+  /* Ten rows by default, the tail one click away. The whole world has hundreds
+     of credited regions, so the block has to open at a fixed height, and the
+     ranks have to stay absolute from 1 either way — → flies to a rank the
+     reader can name. */
   await pickSub(page, 0);
   await zoomTo(page, 1.4);   // whole world: the longest list there is
   let p = await topState(page);
-  ok(p.pager && /^1\/\d+$/.test(p.pager), "world view opens on page 1 (" + p.pager + ")");
-  const pages = +String(p.pager).split("/")[1];
-  ok(pages <= 10, "never offers more than 10 pages (" + pages + ")");
-  ok(p.pagerOff[0] === true, "‹ is dead on page 1");
-  ok(p.ranks.join() === "1,2,3,4,5,6,7,8,9,10", "page 1 ranks 1..10");
-  await clickPage(page, 1);
+  ok(p.rows === 10, "the world view opens on ten rows (" + p.rows + ")");
+  ok(p.ranks.join() === "1,2,3,4,5,6,7,8,9,10", "the rows rank 1..10");
+  ok(p.more && /^show top (\d+)$/.test(p.more) && +p.more.split(" ")[2] > 10,
+     "a longer ranking offers its tail (“" + p.more + "”)");
+  const tail = +p.more.split(" ")[2];
+  ok(tail <= 100, "never offers more than a hundred rows (" + tail + ")");
+
+  await page.evaluate(() => document.getElementById("top-more").click());
   p = await topState(page);
-  ok(p.pager === "2/" + pages, "› advances a page (" + p.pager + ")");
-  ok(p.ranks[0] === "11" && p.ranks[9] === "20", "page 2 ranks 11..20, not 1..10");
-  for (let i = 2; i < pages; i++) await clickPage(page, 1);
-  p = await topState(page);
-  ok(p.pager === pages + "/" + pages && p.pagerOff[1] === true,
-     "› is dead on the last page (" + p.pager + ")");
-  /* Clamp, not reset: a pan that shortens the list drops you to its last page,
-     and a pan back to a longer one leaves you where you were. */
-  await clickPage(page, 0);
-  const deep = +String((await topState(page)).pager).split("/")[0];
-  await zoomTo(page, 3.4);
-  p = await topState(page);
-  const now = p.pager ? +p.pager.split("/")[0] : 1;
-  const fewer = p.pager ? +p.pager.split("/")[1] : 1;
-  ok(now === Math.min(deep, fewer),
-     "a shorter list clamps the page rather than resetting it (" + deep +
-     " → " + (p.pager || "hidden") + ")");
-  /* but changing the credit window is a different ranking entirely — page 1 */
+  ok(p.rows === tail, "the toggle shows all " + tail + " of them (" + p.rows + ")");
+  ok(p.ranks[0] === "1" && p.ranks[tail - 1] === String(tail),
+     "the expanded rows still rank 1.." + tail);
+  ok(p.more === "show top 10", "and offers the way back (“" + p.more + "”)");
+
+  /* Expanded is a property of the reader, not of the ranking: a different
+     credit window re-ranks the rows but must not fold the list back up. */
   await pickSub(page, 1);
   await settleTop(page);
-  p = await topState(page);
-  ok(!p.pager || p.pager.startsWith("1/"),
-     "a new credit window starts at page 1 (" + (p.pager || "hidden") + ")");
+  ok((await topState(page)).rows > 10, "a new credit window stays expanded");
+  await page.evaluate(() => document.getElementById("top-more").click());
+  ok((await topState(page)).rows === 10, "the toggle folds it back to ten");
 
   ok(errors.length === 0, "no page errors / failed local requests" +
      (errors.length ? " — " + errors.join("; ") : ""));
@@ -709,7 +709,7 @@ async function layerRun(browser, base) {
       await pickGroup(page, "NO₂");   // the chart draws m itself on this group
       await page.mouse.click(home.x, home.y);
       const box = await page.waitForFunction(id => {
-        if (!document.getElementById("rp-h3").textContent.includes(id)) return false;
+        if (document.getElementById("rp-h3").dataset.h3 !== id) return false;
         const b = [...document.querySelectorAll("#rp-metrics button")]
                     .find(x => x.querySelector(".k").textContent.trim() === "NO₂");
         if (!b || b.querySelector(".v").textContent.includes("+")) return false;
@@ -813,14 +813,15 @@ async function layerRun(browser, base) {
      alone, and the list used to fall back to res-3 whenever that window was not
      "last month" — so a reader on 5-year change at res-6 got res-3 rows and an
      arrow that zoomed them out. */
-  for (const [win, wname] of [[0, "last month"], [2, "all time"]]) {
+  for (const [win, wname, wlab] of [[0, "last month", "this month"],
+                                    [2, "all time", "all time"]]) {
     await pickGroup(page, "Credit");
     await pickSub(page, win);
     await pickGroup(page, "Change");
     await pickSub(page, 1);                 // 5 years
     await zoomTo(page, 9.2);
     const st = await topState(page);
-    ok(st.res === 6 && st.title === "Top cells — in view",
+    ok(st.res === 6 && st.title === "Top cells in view — " + wlab,
        "Change/5y with the “" + wname + "” window still lists res-6 (" +
        st.title + ")");
     if (st.rows) {
@@ -842,8 +843,8 @@ async function layerRun(browser, base) {
                              ["credit12", "last 12 months"],
                              ["creditAll", "all time"]]) {
     const dl = await newPage(browser, base + "#" + key);
-    const note = await $text(dl.page, "#top-note");
-    ok(note.includes(want),
+    const title = await $text(dl.page, "#top-title");
+    ok(title.includes(want),
        "#" + key + " starts the top list on its own window (" + want + ")");
     await dl.page.close();
   }
