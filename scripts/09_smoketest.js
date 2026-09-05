@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// GENERATED — built from lufterl-map v1.3.0 (2026-09-05). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
+// GENERATED — built from lufterl-map v1.4.0 (2026-09-05). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
 /* ============================================================================
  * Smoke test of the built web bundle (lufterl-map)
  * ============================================================================
@@ -923,6 +923,38 @@ async function touchRun(browser, base) {
     ok(got.active !== was && got.pressed === ci,
        "tapping the credit card paints the map by it (" + was + " → " + got.active + ")");
   }
+
+  /* Phone width, which no other run exercises: every run launches at 1400x900,
+     so the mobile media query has always been checked at a width where it has
+     room to spare. The brand row is the tight one — it overflowed the card and
+     pushed the about link out of it, in September but not in May, because the
+     month name is variable-width. Assert the link stays inside the card at the
+     narrowest width worth supporting, with the longest month forced in. */
+  await page.setViewport({ width: 320, height: 720 });
+  const brand = await page.evaluate(() => {
+    const chip = document.getElementById("month-chip");
+    const before = chip.textContent;
+    chip.textContent = "September 2026";           // the widest the chip ever gets
+    const card = document.getElementById("layer-card").getBoundingClientRect();
+    const link = document.getElementById("about-link").getBoundingClientRect();
+    const word = document.querySelector(".wordmark").getBoundingClientRect();
+    const out = {
+      cardRight: +card.right.toFixed(1), linkRight: +link.right.toFixed(1),
+      linkLeft: +link.left.toFixed(1), wordRight: +word.right.toFixed(1),
+      chipShown: getComputedStyle(chip).display !== "none"
+    };
+    chip.textContent = before;
+    return out;
+  });
+  ok(brand.linkRight <= brand.cardRight,
+     "at 320px the about link stays inside the layer card (link " +
+     brand.linkRight + " vs card " + brand.cardRight + ")");
+  ok(brand.linkLeft >= brand.wordRight,
+     "and clear of the wordmark, which keeps its size (" +
+     brand.wordRight + " -> " + brand.linkLeft + ")");
+  ok(!brand.chipShown,
+     "the month chip yields the row on mobile — it leads the About colophon instead");
+  await page.setViewport({ width: 1400, height: 900 });
 
   await page.click("#rp-close");
   ok((await panelState(page)).hidden, "× dismisses the panel");
