@@ -1,8 +1,8 @@
-# lufterl
+# Lichterloh
 
 **Global hexagonal NO₂ reduction panel and credit system.**
 
-lufterl tracks tropospheric NO₂ for every H3 hexagon on the planet and scores
+Lichterloh tracks tropospheric NO₂ for every H3 hexagon on the planet and scores
 each cell's short- and long-term reduction performance. Cells earn *credits*
 by undercutting their own historical minimum, which could serve as the basis
 for an incentive-driven system. Successor to the city-based
@@ -193,7 +193,7 @@ the **lufterl-map** repo. This pipeline consumes it as three committed files:
 `viz/template.html` (the app shell, with `__NAME__`/`__META__`/`__BIN__`/
 `__CARTO_KEY__` placeholders script 06 splices), `scripts/09_smoketest.js` and
 `viz/VIZ_VERSION`. Refresh them with `scripts/update_viz.sh` (builds a
-sibling checkout, default `../lufterl-map`, override `LUFTERL_MAP_DIR`), then
+sibling checkout, default `../lufterl-map`, override `NO2_MAP_DIR`), then
 rerun script 06 and commit all three together.
 
 Script 06 is the format's **producer**: no per-cell ids, coordinates or
@@ -271,8 +271,18 @@ this layer matters.
 
 ## Name
 
-**lufterl** — Austrian diminutive of *Luft*, a fresh clean breeze. What the
-project would like every hexagon's air to become.
+**Lichterloh** — German for *ablaze*, as in `lichterloh brennen`, to burn
+fiercely. Most NO₂ comes from combustion, so a global NO₂ map is a map of what
+is burning. The tagline finishes the thought: *Alles steht in Flammen. Noch.* —
+"Everything is ablaze. For now." The `Noch.` is the point; the panel exists to
+measure that last word coming true.
+
+The English page ships the English line. Note that the name carries no meaning
+for a reader without German, so the tagline has to travel with it — it is in
+the share-card metadata and opens the About text, not only in the wordmark.
+
+Previously **lufterl**, an Austrian diminutive of *Luft* — a fresh clean
+breeze. Renamed because a diminutive undersells what the data shows.
 
 The display name lives in one place, `PROJECT_NAME` in `config/config.R`,
 and is spliced into the web map at build time (the template writes

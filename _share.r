@@ -1,5 +1,5 @@
 # ============================================================================
-# Shared utility functions for lufterl
+# Shared utility functions for Lichterloh
 # ============================================================================
 
 #' Load and install packages if needed
