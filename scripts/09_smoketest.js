@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// GENERATED — built from lufterl-map v1.2.0 (2026-09-04). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
+// GENERATED — built from lufterl-map v1.3.0 (2026-09-05). This file is a build artifact; edit the lufterl-map repo instead, then re-vendor.
 /* ============================================================================
  * Smoke test of the built web bundle (lufterl-map)
  * ============================================================================
@@ -401,6 +401,11 @@ const cardState = page => page.evaluate(() => ({
               .map((e, i) => e.getAttribute("aria-pressed") === "true" ? i : -1)
               .filter(i => i >= 0)
 }));
+/* The cards are built from GROUPS, so their order is an editorial choice that
+   has changed before (NO₂ moved to the front when it became the default layer).
+   Address them by group label so a reorder cannot silently retarget an
+   assertion at the wrong card. */
+const cardIx = (cards, group) => cards.labels.findIndex(l => l.startsWith(group));
 const layerState = page => page.evaluate(() => ({
   active: window._app.activeLayer,
   group: [...document.querySelectorAll("#layer-buttons button")]
@@ -582,9 +587,10 @@ async function topRegionsRun(browser, base) {
          they must print the same string. They did not when the list ranked by
          one window while the map painted another. */
       const cards = await cardState(page);
-      ok(cards.values[1] === rowVal,
+      const cv = cards.values[cardIx(cards, "Credit")];
+      ok(cv === rowVal,
          "window “" + scopes[win] + "”: list row and panel card agree (" +
-         rowVal + " vs " + cards.values[1] + ")");
+         rowVal + " vs " + cv + ")");
     }
   }
 
@@ -629,6 +635,19 @@ async function topRegionsRun(browser, base) {
 async function layerRun(browser, base) {
   console.log("layer control (groups + horizons):");
   const { page, errors, dataReqs } = await newPage(browser, base);
+
+  /* A hash-less visit opens on the measurement, not on a derived metric. The
+     rail order and the default have to move together: the first group being
+     NO₂ while the map painted trend would leave the pressed button out of sync
+     with the paint on first load. Read before anything below clicks. */
+  const first = await page.evaluate(() => ({
+    active: window._app.activeLayer,
+    pressed: [...document.querySelectorAll("#layer-buttons button")]
+               .findIndex(b => b.getAttribute("aria-pressed") === "true")
+  }));
+  ok(first.active === "m" && first.pressed === 0,
+     "a hash-less visit opens on NO₂ (activeLayer=" + first.active +
+     ", pressed=" + first.pressed + ")");
 
   /* data/<month>/ is served immutable but named by month, so a rebuild of an
      already-shipped month must not reuse the old URL — every .bin fetch has to
@@ -730,7 +749,9 @@ async function layerRun(browser, base) {
   }
 
   const groups = await page.$$eval("#layer-buttons button", bs => bs.map(b => b.textContent));
-  ok(groups.length === 3 && groups.join("/") === "Change/Credit/NO₂",
+  /* NO₂ leads: it is the layer the map opens on, so the rail reads in the same
+     order as the default view rather than starting on a derived metric. */
+  ok(groups.length === 3 && groups.join("/") === "NO₂/Change/Credit",
      "three primary layers (" + groups.join(" / ") + ")");
 
   const seen = new Map();
@@ -785,26 +806,28 @@ async function layerRun(browser, base) {
     const a = await cardState(page);
     ok(a.labels.length === 3, "the panel shows one card per primary layer (" +
        a.labels.join(" / ") + ")");
-    ok(a.accented.length === 1 && a.accented[0] === 0,
+    const chg = cardIx(a, "Change");
+    ok(a.accented.length === 1 && a.accented[0] === chg,
        "the card the map is painted by is the accented one");
     await pickSub(page, 1);                       // 5 years
     const b = await cardState(page);
-    ok(b.labels[0] !== a.labels[0],
-       "switching horizon relabels the card (" + a.labels[0] + " → " + b.labels[0] + ")");
-    ok(b.values[0] !== a.values[0] || a.values[0] === "–",
-       "and re-reads its value for the pinned hex (" + a.values[0] + " → " + b.values[0] + ")");
+    ok(b.labels[chg] !== a.labels[chg],
+       "switching horizon relabels the card (" + a.labels[chg] + " → " + b.labels[chg] + ")");
+    ok(b.values[chg] !== a.values[chg] || a.values[chg] === "–",
+       "and re-reads its value for the pinned hex (" + a.values[chg] + " → " + b.values[chg] + ")");
     await pickGroup(page, "Credit");
     const c = await cardState(page);
-    ok(c.accented.length === 1 && c.accented[0] === 1,
+    ok(c.accented.length === 1 && c.accented[0] === cardIx(c, "Credit"),
        "selecting Credit moves the accent to the credit card");
 
     /* The cards are controls, not readouts: pressing one paints the map by that
        layer at the horizon the card names, and the accent follows. */
-    await page.evaluate(() => document.querySelectorAll("#rp-metrics button")[0].click());
+    await page.evaluate(i => document.querySelectorAll("#rp-metrics button")[i].click(),
+                        cardIx(c, "Change"));
     const d = await cardState(page), ls = await layerState(page);
     ok(ls.active === "trend5" && ls.group === "Change" && ls.sub === "5 years",
        "pressing the Change card selects the horizon it names (" + ls.active + ")");
-    ok(d.accented.length === 1 && d.accented[0] === 0,
+    ok(d.accented.length === 1 && d.accented[0] === cardIx(d, "Change"),
        "and the accent follows to the pressed card");
   }
 
@@ -890,13 +913,14 @@ async function touchRun(browser, base) {
   const cards = await page.$$("#rp-metrics button");
   ok(cards.length === 3, "the panel shows one pressable card per primary layer");
   if (cards.length === 3) {
-    await cards[1].click();
+    const ci = cardIx(await cardState(page), "Credit");
+    await cards[ci].click();
     const got = await page.evaluate(() => ({
       active: window._app.activeLayer,
       pressed: [...document.querySelectorAll("#rp-metrics button")]
                  .findIndex(b => b.getAttribute("aria-pressed") === "true")
     }));
-    ok(got.active !== was && got.pressed === 1,
+    ok(got.active !== was && got.pressed === ci,
        "tapping the credit card paints the map by it (" + was + " → " + got.active + ")");
   }
 
